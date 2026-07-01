@@ -1,24 +1,23 @@
 function w = fetch_live_weather(lat, lon)
-%FETCH_LIVE_WEATHER Fetches real-time weather data for the ground station via Open-Meteo API
+%FETCH_LIVE_WEATHER Retrieves real-time atmospheric data from Open-Meteo API for ground stations
 %
 %   w = FETCH_LIVE_WEATHER(lat, lon)
 %
 %   Inputs:
-%     lat, lon - Ground station latitude and longitude (deg)
+%     lat, lon - Ground station coordinates in degrees
 %
 %   Outputs (struct w):
-%     w.VisibilityKm      - Measured visibility (km). Core value fed into the link budget.
-%     w.CloudCoverPct      - Total cloud cover (%)
-%     w.CloudCoverLowPct   - Low cloud cover (%)
-%     w.WindSpeedMs        - Wind speed (m/s)
-%     w.TemperatureC        - Temperature (°C)
-%     w.WeatherCode         - WMO weather code
-%     w.AttenuationType     - "clear"|"rain"|"snow" (Auto-classified from WeatherCode)
-%     w.FetchTimeUTC        - Data retrieval timestamp
+%     w.VisibilityKm      - Measured visibility in km (directly mapped to link budget equation calculations)
+%     w.CloudCoverPct      - Total cloud cover percentage (%)
+%     w.CloudCoverLowPct   - Low-level cloud cover percentage (%)
+%     w.WindSpeedMs        - Wind speed in m/s
+%     w.TemperatureC        - Surface air temperature (°C)
+%     w.WeatherCode         - WMO weather state code
+%     w.AttenuationType     - Categorized link mode ("clear" | "rain" | "snow")
+%     w.FetchTimeUTC        - Query execution timestamp
 %
-%   The API is a free service that does not require an API key (Open-Meteo, CC BY 4.0).
-%   If the call fails, a warning is issued and safe defaults are used (clear, 10km)
-%   so that simulations do not crash during field tracking due to network drops.
+%   The API requires no access keys. On network or API failure, a warning is thrown
+%   and safe baseline defaults are applied (clear, 10km visibility) to avoid crashing active workflows.
 
     url = "https://api.open-meteo.com/v1/forecast";
     params = {
@@ -49,7 +48,7 @@ function w = fetch_live_weather(lat, lon)
 
     catch ME
         warning("fetch_live_weather:apiFailed", ...
-            "Real-time weather API call failed (%s). Falling back to default (clear, 10km).", ...
+            "Real-time weather API request failed (%s). Falling back to safe defaults (clear, 10km).", ...
             ME.message);
         w = struct;
         w.VisibilityKm     = 10;

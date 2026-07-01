@@ -31,6 +31,8 @@ cfg.satA.BoresightBias    = 1.0e-6;  % rad, Constant payload alignment bias for 
 % Orbital Geometry Configuration
 cfg.orbit.UseTLE = false;
 cfg.orbit.FixedElevationAngle = 50;  % deg, Static fallback target when UseTLE is disabled
+cfg.orbit.TLE_Line1 = '';            % Reserved for future TLE pass calculations
+cfg.orbit.TLE_Line2 = '';
 
 %% ---- 3. Satellite B (Inter-Satellite Mesh Routing, Optional) ----
 cfg.satB.OpticsEfficiency = 0.8;

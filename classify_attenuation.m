@@ -3,14 +3,14 @@ function attType = classify_attenuation(weatherCode)
 %
 %   attType = CLASSIFY_ATTENUATION(weatherCode)
 %
-%   Open-Meteo returns standard WMO weather codes (0-99). This function 
-%   maps them into three attenuation modes required by the link budget:
-%     "rain"  - Uses the rain coefficient formula (Ageo = 2.8/V) for rain/showers/thunderstorms.
-%     "snow"  - Uses the snow coefficient formula (Ageo = 58/V) for snow/blizzards.
-%     "clear" - Uses the general Kim scattering model. Applied to all situations without 
-%               precipitation (e.g., clear, cloudy, fog, or when visibility is low).
-%               The original MathWorks example labels this formula as "fog", but it is actually 
-%               a general atmospheric scattering model based on wavelength and visibility.
+%   Open-Meteo returns the WMO standard weather codes (0-99). This function maps
+%   them into three distinct attenuation models required for optical calculations:
+%     "rain"  - Uses the precipitation formula (Ageo = 2.8/V) for rain/showers/thunderstorms
+%     "snow"  - Uses the snowfall formula (Ageo = 58/V) for snow/ice pellets
+%     "clear" - Uses the generalized Kim scattering model (corresponds to the baseline "fog" formula)
+%               Applied to clear sky, cloudy conditions, light haze, or purely visibility-based drop.
+%
+%   If attType is "clear", the logic seamlessly applies the piecewise delta + Kim formulation.
 
     if isnan(weatherCode)
         attType = "clear";
@@ -24,9 +24,8 @@ function attType = classify_attenuation(weatherCode)
     elseif ismember(code, [71 73 75 77 85 86])
         attType = "snow";
     else
-        % 0-3 (Clear to Cloudy), 45/48 (Fog), 51-57 (Drizzle), etc.
-        % Processed via the visibility-based general scattering model. Since measured 
-        % visibility already reflects the attenuation level, no special formulas are needed.
+        % Codes 0-3 (clear to overcast), 45/48 (fog), 51-57 (drizzle) map to visibility-based generalized models.
+        % Measured visibility already dynamically accounts for attenuation, meaning specialized formulas are omitted here.
         attType = "clear";
     end
 end

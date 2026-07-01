@@ -9,7 +9,7 @@ function run_link_budget_live(cfg)
 %
 % Requirements: Satellite Communications Toolbox (fspl, slantRangeCircularOrbit)
 
-% Check input arguments to support both standalone operation and programmatic GUI callbacks
+% Support both standalone manual operations and programmatic GUI callback functions
 if nargin < 1
     cfg = ogs_config();
 end
@@ -33,8 +33,8 @@ else
     fprintf("Using manual weather overrides: Visibility=%.2f km, Attenuation Mode=%s\n", w.VisibilityKm, w.AttenuationType);
 end
 
-visibility = w.VisibilityKm;               % empirical visibility value in km
-link.AttenuationType = w.AttenuationType;   % auto-resolved attenuation category ("clear"|"rain"|"snow")
+visibility = w.VisibilityKm;               % Empirical visibility value in km
+link.AttenuationType = w.AttenuationType;   % Auto-resolved attenuation category ("clear"|"rain"|"snow")
 
 %% ---- 2. Orbital Path Geometry ----
 link.ElevationAngle = cfg.orbit.FixedElevationAngle;
