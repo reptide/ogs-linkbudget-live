@@ -2,6 +2,8 @@
 
 An interactive, multi-tab MATLAB dashboard built with modern UI components (`uifigure`) designed to evaluate the physical layer performance, signal margin, and tracking reliability of free-space optical (laser) communication links between a spacecraft terminal and an Optical Ground Station.
 
+> **Changelog note:** the config schema, GUI field wiring, and continuous-tracking engine were reconciled to a single shared schema (`ogs_config.m`). Previously, most Hardware tab controls and the custom lat/lon fields had no effect on Single Snapshot results due to a config field-name mismatch, and Continuous Tracking mode ignored the Live/Manual weather switch and the Rayleigh/Rician dropdown. See inline comments in each `.m` file for specifics.
+
 ---
 
 ## 🛠️ Operational Setup & Input Instructions
@@ -12,13 +14,13 @@ The graphical user interface is organized into a clean, two-tab layout designed 
 Use this panel to define where the ground station is on Earth, how the satellite passes over it, and how atmospheric losses are evaluated.
 
 1. **Link Direction Dropdown:** Select the orientation of your laser link (`downlink`, `uplink`, or `inter-satellite`).
-2. **Min Elevation Floor (deg):** Set the minimum angle above the horizon at which tracking begins. *Engineering tip: Keeping this at $\geq 20^\circ$ helps skip the thickest, high-loss layers of the lower atmosphere.*
+2. **Pass Elevation Angle (deg):** Sets the fixed elevation angle used for the entire snapshot or pass (not a minimum threshold — the simulation does not currently model a satellite descending through multiple elevation angles over time; that requires TLE-based pass tracking, see Next Engineering Focus Areas). *Engineering tip: values $\geq 20^\circ$ avoid the thickest, high-loss layers of the lower atmosphere.*
 3. **Atmosphere Data Slider:** Toggle between **Live API** and **Manual**.
    * **Live API:** Queries real-time local weather reports at your exact coordinates to dynamically scale atmospheric attenuation based on real-world humidity, cloud covers, or precipitations.
-   * **Manual:** Bypasses live data networks and locks the simulation to a predictable, clear-sky attenuation baseline (nominal $-3.0\text{ dB}$).
+   * **Manual:** Bypasses live data networks and uses the visibility/attenuation-type values set in `ogs_config.m` (`cfg.weather.Manual`), run through the same atmospheric scattering model as Live mode — not a fixed placeholder value.
 4. **Geodetic Coordinate Overrides:** Type exact numeric values into the **Station Latitude ($^\circ$N)**, **Station Longitude ($^\circ$E)**, and **Station Alt AMSL (m)** fields to pinpoint your custom ground telescope location anywhere on Earth.
 5. **Simulation Mode Button Group:** Select **Single Snapshot** for a quick static link budget analysis, or **Continuous Tracking** to model statistical mechanical vibrations over time.
-6. **Continuous Simulation Sub-settings:** Adjust the total pass timeline **Duration (seconds)** and choose between **Rayleigh (No Bias)** or **Rician (With Bias)** tracking pointing jitter distributions.
+6. **Continuous Simulation Sub-settings:** Adjust the total pass timeline **Duration (seconds)** and choose between **Rayleigh (No Bias)** — zero mean pointing offset — or **Rician (With Bias)** — mean offset set by the Boresight Bias field on the Hardware tab.
 
 <p align="center">
   <img src="images/gui_panel1.png" width="550" alt="Scenario Settings Control Panel Interface Map">

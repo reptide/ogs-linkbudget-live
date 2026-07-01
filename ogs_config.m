@@ -1,37 +1,37 @@
 function cfg = ogs_config()
 %OGS_CONFIG Configuration parameters for the real-time weather-linked optical link budget
 %
-%   This file acts as the single point of configuration for the entire suite.
-%   Modifying ground station locations, orbital parameters, lens metrics, or link configurations
-%   here will apply across all snapshot and continuous engines without altering execution scripts.
-%
-%   Structure follows the MathWorks Optical Satellite Communication Link Budget Analysis 
-%   convention (gs / satA / satB / link structures) ensuring 100% downstream mathematical compatibility.
+%   SINGLE SCHEMA NOTICE: both run_link_budget_live.m (snapshot) and
+%   run_link_budget_continuous.m (time-series) read from this exact same
+%   struct shape: cfg.gs / cfg.satA / cfg.satB / cfg.orbit / cfg.link /
+%   cfg.weather. ogs_gui.m writes into these same fields. Do not introduce
+%   a second schema (e.g. cfg.tx/cfg.rx/cfg.site) - that was the root cause
+%   of the GUI silently not affecting snapshot results.
 
 cfg = struct;
 
 %% ---- 1. Ground Station (GS) Position & Optical Specs ----
-cfg.gs.Latitude       = 36.3504;   % deg, Daejeon, South Korea
-cfg.gs.Longitude      = 127.3845;  % deg, Daejeon, South Korea
-cfg.gs.Height         = 0.1;       % km, Altitude above sea level (~100m average for Daejeon)
+cfg.gs.Latitude       = 36.3504;   % deg, Daejeon, South Korea (default; overridden by GUI lat field)
+cfg.gs.Longitude      = 127.3845;  % deg, Daejeon, South Korea (default; overridden by GUI lon field)
+cfg.gs.Height         = 0.1;       % km, Altitude AMSL (default; overridden by GUI alt field, m->km)
 cfg.gs.OpticsEfficiency = 0.8;     % Optical efficiency of the receiver assembly
-cfg.gs.ApertureDiameter = 1;       % m, Telescope primary aperture diameter
-cfg.gs.PointingError    = 1e-6;    % rad, Baseline static pointing error offset
-cfg.gs.JitterSigma      = 1.5e-6;  % rad, 1-sigma random tracking vibration for time-series analysis
-cfg.gs.BoresightBias    = 0.5e-6;  % rad, Constant systematic alignment bias for Rician model simulation
+cfg.gs.ApertureDiameter = 1;       % m, Ground telescope aperture diameter (GUI "Rx Aperture")
+cfg.gs.PointingError    = 1e-6;    % rad, Static/systematic pointing error (used by snapshot engine only)
+cfg.gs.JitterSigma      = 1.0e-6;  % rad, 1-sigma dynamic tracking jitter (used by continuous engine only)
 
 %% ---- 2. Satellite A (Orbital Ground-to-Space Terminal) ----
 cfg.satA.Height           = 550;   % km, Orbital altitude (LEO profile configuration)
 cfg.satA.OpticsEfficiency = 0.8;   % Optical efficiency of the payload terminal
-cfg.satA.ApertureDiameter = 0.07;  % m, Payload lens aperture diameter
-cfg.satA.PointingError    = 1e-6;  % rad, Baseline static pointing error offset
-cfg.satA.JitterSigma      = 3.0e-6;  % rad, 1-sigma tracking vibration of fine-pointing mechanisms
-cfg.satA.BoresightBias    = 1.0e-6;  % rad, Constant payload alignment bias for Rician model simulation
+cfg.satA.ApertureDiameter = 0.07;  % m, Payload lens aperture diameter (GUI "Tx Aperture")
+cfg.satA.PointingError    = 1e-6;  % rad, Static/systematic pointing error (used by snapshot engine only)
+cfg.satA.JitterSigma      = 2.0e-6;  % rad, 1-sigma dynamic tracking jitter (used by continuous engine only)
 
 % Orbital Geometry Configuration
+% NOTE: FixedElevationAngle is used as THE pass elevation angle for the
+% whole snapshot/pass, not a minimum threshold. GUI label reflects this.
 cfg.orbit.UseTLE = false;
-cfg.orbit.FixedElevationAngle = 50;  % deg, Static fallback target when UseTLE is disabled
-cfg.orbit.TLE_Line1 = '';            % Reserved for future TLE pass calculations
+cfg.orbit.FixedElevationAngle = 50;  % deg, static fallback target when UseTLE is disabled
+cfg.orbit.TLE_Line1 = '';            % reserved for future TLE pass calculations
 cfg.orbit.TLE_Line2 = '';
 
 %% ---- 3. Satellite B (Inter-Satellite Mesh Routing, Optional) ----
@@ -40,14 +40,21 @@ cfg.satB.ApertureDiameter = 0.06;  % m
 cfg.satB.PointingError    = 1e-6;  % rad
 
 %% ---- 4. Link Layer Operational Parameters ----
-cfg.link.Wavelength        = 1550e-9;  % m, Core carrier wavelength
-cfg.link.TroposphereHeight = 20;       % km, Upper edge boundary for atmospheric loss profiles
-cfg.link.SatDistance       = 1000;     % km, Link distance specific to inter-satellite cross-links
+cfg.link.Wavelength        = 1550e-9;  % m, core carrier wavelength
+cfg.link.TroposphereHeight = 20;       % km, upper edge boundary for atmospheric loss profiles
+cfg.link.SatDistance       = 1000;     % km, link distance specific to inter-satellite cross-links
 cfg.link.Type              = "downlink"; % "downlink" | "uplink" | "inter-satellite"
 
-cfg.link.Ptx  = 17.5;   % dBm, Total optical output transmitter power
-cfg.link.Preq = -35.5;  % dBm, Required sensitivity threshold (Assuming 10 Gbps OOK, BER 1e-12)
-cfg.link.AbsorptionLoss = 0.01; % dB, Constant molecular absorption overhead at 1550nm (ITU-R P.1621-2)
+cfg.link.Ptx  = 17.5;   % dBm, transmitter power. GUI converts its Watts spinner to dBm before
+                         % writing here, so this field is ALWAYS dBm regardless of entry point.
+cfg.link.Preq = -35.5;  % dBm, required receiver sensitivity (10 Gbps OOK, BER 1e-12 assumption)
+                         % Used as the single outage threshold by BOTH engines (dBm throughout).
+cfg.link.AbsorptionLoss = 0.01; % dB, constant molecular absorption overhead at 1550nm (ITU-R P.1621-2)
+
+cfg.link.BoresightBias = 0; % rad, constant systematic pointing offset used only by the continuous
+                             % engine's Rician tracking model. Kept at link level (not per-terminal)
+                             % since it represents relative tx/rx misalignment, not a single terminal's
+                             % property.
 
 %% ---- 5. Atmospheric Data API Gateway ----
 cfg.weather.Provider  = "open-meteo";  % Free API service, no access token keys required

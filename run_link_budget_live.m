@@ -8,6 +8,10 @@ function run_link_budget_live(cfg)
 %   2) Automates attenuation categorization from live WMO weather condition indices
 %
 % Requirements: Satellite Communications Toolbox (fspl, slantRangeCircularOrbit)
+%
+% Reads the unified cfg schema defined in ogs_config.m (cfg.gs/satA/satB/
+% orbit/link/weather). See compute_atmospheric_loss.m for the shared
+% atmosphere physics also used by run_link_budget_continuous.m.
 
 % Support both standalone manual operations and programmatic GUI callback functions
 if nargin < 1
@@ -37,6 +41,12 @@ visibility = w.VisibilityKm;               % Empirical visibility value in km
 link.AttenuationType = w.AttenuationType;   % Auto-resolved attenuation category ("clear"|"rain"|"snow")
 
 %% ---- 2. Orbital Path Geometry ----
+% NOTE: FixedElevationAngle is used as the fixed elevation angle for the
+% whole snapshot, not a minimum threshold (see ogs_config.m comment).
+% TLE-based time-varying elevation is not yet implemented.
+if isfield(cfg.orbit, 'UseTLE') && cfg.orbit.UseTLE
+    error("TLE-based elevation tracking is not implemented yet. Set cfg.orbit.UseTLE = false.");
+end
 link.ElevationAngle = cfg.orbit.FixedElevationAngle;
 
 %% ---- 3. Establish System Terminal Roles ----
@@ -64,45 +74,18 @@ if link.Type=="inter-satellite"
     fprintf("\nLink margin (inter-satellite): %.4f dB\n", linkMargin);
 
 else % uplink / downlink atmospheric paths
-    dT  = (link.TroposphereHeight - gs.Height) .* cscd(link.ElevationAngle);
     dGS = slantRangeCircularOrbit(link.ElevationAngle, satA.Height*1e3, gs.Height*1e3);
     pathLoss = fspl(dGS, link.Wavelength);
 
-    % --- Geometrical Scattering Loss Evaluation (Empirical Visibility Framework) ---
-    if link.AttenuationType == "rain"
-        geoCoeff = 2.8/visibility;
-    elseif link.AttenuationType == "snow"
-        geoCoeff = 58/visibility;
-    else % "clear" - Core Kim atmospheric scattering model (Matches baseline fog calculation)
-        if visibility <= 0.5
-            delta = 0;
-        elseif visibility <= 1
-            delta = visibility - 0.5;
-        elseif visibility <= 6
-            delta = 0.16*visibility + 0.34;
-        elseif visibility <= 50
-            delta = 1.3;
-        else
-            delta = 1.6;
-        end
-        geoCoeff = (3.91/visibility) * ((link.Wavelength*1e9/550)^-delta);
-    end
-    geoScaLoss = 4.3429*geoCoeff*dT;
-
-    % --- Mie Scattering Loss Core Logic (Pure physical constraints) ---
-    lambda_mu = link.Wavelength*1e6;
-    a = (0.000487*lambda_mu^3) - (0.002237*lambda_mu^2) + (0.003864*lambda_mu) - 0.004442;
-    b = (-0.00573*lambda_mu^3) + (0.02639*lambda_mu^2) - (0.04552*lambda_mu) + 0.05164;
-    c = (0.02565*lambda_mu^3) - (0.1191*lambda_mu^2) + (0.20385*lambda_mu) - 0.216;
-    d = (-0.0638*lambda_mu^3) + (0.3034*lambda_mu^2) - (0.5083*lambda_mu) + 0.425;
-    mieER = a*(gs.Height^3) + b*(gs.Height^2) + c*gs.Height + d;
-    mieScaLoss = (4.3429*mieER) ./ sind(link.ElevationAngle);
+    [atmLossDB, geoScaLoss, mieScaLoss] = compute_atmospheric_loss( ...
+        visibility, link.AttenuationType, link.ElevationAngle, gs.Height, ...
+        link.Wavelength, link.TroposphereHeight, link.AbsorptionLoss);
 
     linkMargin = link.Ptx + 10*log10(tx.OpticsEfficiency) + 10*log10(rx.OpticsEfficiency) + ...
-        Gtx + Grx - txPointingLoss - rxPointingLoss - pathLoss - ...
-        link.AbsorptionLoss - geoScaLoss - mieScaLoss - link.Preq;
+        Gtx + Grx - txPointingLoss - rxPointingLoss - pathLoss - atmLossDB - link.Preq;
 
     fprintf("\n===== LINK BUDGET SNAPSHOT RESULTS (%s) =====\n", upper(link.Type));
+    fprintf("  Ground station coords : %.4f N, %.4f E\n", gs.Latitude, gs.Longitude);
     fprintf("  Elevation angle       : %.1f deg\n", link.ElevationAngle);
     fprintf("  Slant range           : %.1f km\n", dGS/1e3);
     fprintf("  Visibility (Measured) : %.2f km\n", visibility);
