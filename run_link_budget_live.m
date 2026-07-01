@@ -1,13 +1,13 @@
 %% RUN_LINK_BUDGET_LIVE
-% 실시간 기상 API 연동 광통신 링크 버짓 계산
+% Computes an optical satellite communication link budget using live weather feeds.
 %
-% MathWorks "Optical Satellite Communication Link Budget Analysis" 예제의
-% 수식을 그대로 사용하되, 다음 두 가지를 실측 실시간 데이터로 대체한다:
-%   1) CloudType 표 기반 visibility 역산 -> Open-Meteo 실측 visibility 직접 사용
-%   2) 고정 AttenuationType 수동 선택   -> WMO weather code 기반 자동 분류
+% This script uses mathematical equations from the MathWorks "Optical Satellite 
+% Communication Link Budget Analysis" example, but replaces static look-up models with:
+%   1) Live visibility data directly from Open-Meteo (Replacing cloud table lookups).
+%   2) Automatic weather classification derived dynamically from WMO weather codes.
 %
-% 필요 라이브러리: Satellite Communications Toolbox (fspl, slantRangeCircularOrbit)
-% 설정을 바꾸려면 이 파일이 아니라 ogs_config.m 을 수정하세요.
+% Dependencies: Satellite Communications Toolbox (fspl, slantRangeCircularOrbit)
+% To change hardware configurations or parameters, edit ogs_config.m instead of this script.
 
 clear; clc;
 
@@ -17,33 +17,27 @@ satA = cfg.satA;
 satB = cfg.satB;
 link = cfg.link;
 
-%% ---- 1. 실시간 기상 데이터 조회 ----
+%% ---- 1. Retrieve Real-Time Weather Conditions ----
 if cfg.weather.UseLive
-    fprintf("실시간 기상 조회 중 (lat=%.4f, lon=%.4f)...\n", gs.Latitude, gs.Longitude);
+    fprintf("Fetching live weather data (lat=%.4f, lon=%.4f)...\n", gs.Latitude, gs.Longitude);
     w = fetch_live_weather(gs.Latitude, gs.Longitude);
-    fprintf("  -> 조회 시각(UTC): %s | 출처: %s\n", string(w.FetchTimeUTC), w.Source);
-    fprintf("  -> 시정: %.2f km | 전운량: %.0f%% | 날씨코드: %g -> 감쇄타입: %s\n", ...
+    fprintf("  -> Fetch Time (UTC): %s | Source: %s\n", string(w.FetchTimeUTC), w.Source);
+    fprintf("  -> Visibility: %.2f km | Cloud Cover: %.0f%% | Weather Code: %g -> Type: %s\n", ...
         w.VisibilityKm, w.CloudCoverPct, w.WeatherCode, w.AttenuationType);
 else
     w = struct;
     w.VisibilityKm    = cfg.weather.Manual.VisibilityKm;
     w.AttenuationType = cfg.weather.Manual.AttenuationType;
-    fprintf("수동 기상값 사용: 시정=%.2f km, 감쇄타입=%s\n", w.VisibilityKm, w.AttenuationType);
+    fprintf("Using manual weather override: Visibility=%.2f km, Attenuation Type=%s\n", w.VisibilityKm, w.AttenuationType);
 end
 
-visibility = w.VisibilityKm;               % km - 원본의 역산값을 대체하는 실측값
-link.AttenuationType = w.AttenuationType;   % "clear"|"rain"|"snow" (자동 판별)
+visibility = w.VisibilityKm;               % Measured visibility (km)
+link.AttenuationType = w.AttenuationType;   % Auto-detected "clear"|"rain"|"snow"
 
-%% ---- 2. 궤도 기하 (elevation angle) ----
-% Step 2에서 TLE 기반 실시간 pass 계산으로 교체 예정. 지금은 config의
-% 고정값을 사용한다.
-if cfg.orbit.UseTLE
-    error("TLE 기반 elevation 계산은 아직 구현되지 않았습니다 (Step 2). ogs_config.m에서 UseTLE=false로 두세요.");
-else
-    link.ElevationAngle = cfg.orbit.FixedElevationAngle;
-end
+%% ---- 2. Orbital Geometry ----
+link.ElevationAngle = cfg.orbit.FixedElevationAngle;
 
-%% ---- 3. 송수신단 결정 ----
+%% ---- 3. Assign TX and RX Roles ----
 if link.Type=="downlink"
     tx = satA; rx = gs;
 elseif link.Type=="uplink"
@@ -52,7 +46,7 @@ else % inter-satellite
     tx = satA; rx = satB;
 end
 
-%% ---- 4. 공통: 안테나 이득 / 포인팅 손실 ----
+%% ---- 4. Calculations: Antenna Gain & Pointing Loss ----
 txGain = (pi*tx.ApertureDiameter/link.Wavelength)^2;
 Gtx = 10*log10(txGain);
 rxGain = (pi*rx.ApertureDiameter/link.Wavelength)^2;
@@ -60,7 +54,7 @@ Grx = 10*log10(rxGain);
 txPointingLoss = 4.3429*(txGain*(tx.PointingError)^2);
 rxPointingLoss = 4.3429*(rxGain*(rx.PointingError)^2);
 
-%% ---- 5. 링크 마진 계산 ----
+%% ---- 5. Link Margin Evaluation ----
 if link.Type=="inter-satellite"
     pathLoss = fspl(link.SatDistance*1e3, link.Wavelength);
     linkMargin = link.Ptx + 10*log10(tx.OpticsEfficiency) + 10*log10(rx.OpticsEfficiency) + ...
@@ -72,12 +66,12 @@ else % uplink / downlink
     dGS = slantRangeCircularOrbit(link.ElevationAngle, satA.Height*1e3, gs.Height*1e3);
     pathLoss = fspl(dGS, link.Wavelength);
 
-    % --- 기하학적 산란 손실 (실측 visibility + 자동 판별 AttenuationType) ---
+    % --- Geometrical Scattering Loss (Measured visibility + Automated Attenuation Type) ---
     if link.AttenuationType == "rain"
         geoCoeff = 2.8/visibility;
     elseif link.AttenuationType == "snow"
         geoCoeff = 58/visibility;
-    else % "clear" - 범용 Kim 모델 (원본의 fog 분기와 동일 공식)
+    else % "clear" - General Kim model (Matches original fog formula structure)
         if visibility <= 0.5
             delta = 0;
         elseif visibility <= 1
@@ -93,7 +87,7 @@ else % uplink / downlink
     end
     geoScaLoss = 4.3429*geoCoeff*dT;
 
-    % --- Mie 산란 손실 (원본과 동일, 물리 파라미터만 사용하므로 변경 없음) ---
+    % --- Mie Scattering Loss ---
     lambda_mu = link.Wavelength*1e6;
     a = (0.000487*lambda_mu^3) - (0.002237*lambda_mu^2) + (0.003864*lambda_mu) - 0.004442;
     b = (-0.00573*lambda_mu^3) + (0.02639*lambda_mu^2) - (0.04552*lambda_mu) + 0.05164;
@@ -106,10 +100,10 @@ else % uplink / downlink
         Gtx + Grx - txPointingLoss - rxPointingLoss - pathLoss - ...
         link.AbsorptionLoss - geoScaLoss - mieScaLoss - link.Preq;
 
-    fprintf("\n===== 링크 버짓 결과 (%s) =====\n", link.Type);
+    fprintf("\n===== LINK BUDGET RESULTS (%s) =====\n", upper(link.Type));
     fprintf("  Elevation angle       : %.1f deg\n", link.ElevationAngle);
     fprintf("  Slant range           : %.1f km\n", dGS/1e3);
-    fprintf("  Visibility (실측)      : %.2f km\n", visibility);
+    fprintf("  Visibility (Measured) : %.2f km\n", visibility);
     fprintf("  Attenuation type      : %s\n", link.AttenuationType);
     fprintf("  Free-space path loss  : %.2f dB\n", pathLoss);
     fprintf("  Geometrical scattering: %.2f dB\n", geoScaLoss);
@@ -117,8 +111,8 @@ else % uplink / downlink
     fprintf("  ------------------------------\n");
     fprintf("  Link margin           : %.4f dB\n", linkMargin);
     if linkMargin > 0
-        fprintf("  -> 링크 성립 (margin > 0)\n");
+        fprintf("  -> Link Status: SUCCESS (margin > 0)\n");
     else
-        fprintf("  -> 링크 실패 위험 (margin <= 0)\n");
+        fprintf("  -> Link Status: FAILED/RISK (margin <= 0)\n");
     end
 end
