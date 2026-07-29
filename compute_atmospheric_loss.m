@@ -7,20 +7,14 @@ function [totalLossDB, geoScaLossDB, mieScaLossDB] = compute_atmospheric_loss(..
 %       visibility, attenuationType, elevationAngleDeg, gsHeightKm, ...
 %       wavelengthM, troposphereHeightKm, absorptionLossDB)
 %
-%   This is the SAME physics used in the MathWorks Optical Satellite
-%   Communication Link Budget Analysis example, ported to use live
-%   measured visibility instead of the CloudType lookup table.
-%
-%   Both run_link_budget_live.m (single snapshot) and
-%   run_link_budget_continuous.m (time-series) call this function so the
-%   atmosphere model cannot silently diverge between the two engines again
-%   (previously the continuous engine used a hardcoded -3.0 dB placeholder
-%   instead of this model).
+%   Combines visibility-based geometrical scattering, wavelength- and
+%   altitude-dependent Mie scattering, and constant molecular absorption.
+%   It is the shared atmospheric model for snapshot and continuous engines.
 %
 %   Inputs:
 %     visibility          - measured visibility, km
 %     attenuationType      - "clear" | "rain" | "snow"
-%     elevationAngleDeg    - pass elevation angle, deg
+%     elevationAngleDeg    - worst-case ground-space elevation angle, deg
 %     gsHeightKm            - ground station altitude AMSL, km
 %     wavelengthM           - carrier wavelength, m
 %     troposphereHeightKm   - upper boundary of atmospheric loss region, km
@@ -54,7 +48,7 @@ function [totalLossDB, geoScaLossDB, mieScaLossDB] = compute_atmospheric_loss(..
     end
     geoScaLossDB = 4.3429*geoCoeff*dT;
 
-    % --- Mie scattering loss (pure physical constraints, unchanged from original) ---
+    % --- Mie scattering loss ---
     lambda_mu = wavelengthM*1e6;
     a = (0.000487*lambda_mu^3) - (0.002237*lambda_mu^2) + (0.003864*lambda_mu) - 0.004442;
     b = (-0.00573*lambda_mu^3) + (0.02639*lambda_mu^2) - (0.04552*lambda_mu) + 0.05164;

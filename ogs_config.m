@@ -1,12 +1,5 @@
 function cfg = ogs_config()
 %OGS_CONFIG Configuration parameters for the real-time weather-linked optical link budget
-%
-%   SINGLE SCHEMA NOTICE: both run_link_budget_live.m (snapshot) and
-%   run_link_budget_continuous.m (time-series) read from this exact same
-%   struct shape: cfg.gs / cfg.satA / cfg.satB / cfg.orbit / cfg.link /
-%   cfg.weather. ogs_gui.m writes into these same fields. Do not introduce
-%   a second schema (e.g. cfg.tx/cfg.rx/cfg.site) - that was the root cause
-%   of the GUI silently not affecting snapshot results.
 
 cfg = struct;
 
@@ -15,22 +8,20 @@ cfg.gs.Latitude       = 36.3504;   % deg, Daejeon, South Korea (default; overrid
 cfg.gs.Longitude      = 127.3845;  % deg, Daejeon, South Korea (default; overridden by GUI lon field)
 cfg.gs.Height         = 0.1;       % km, Altitude AMSL (default; overridden by GUI alt field, m->km)
 cfg.gs.OpticsEfficiency = 0.8;     % Optical efficiency of the receiver assembly
-cfg.gs.ApertureDiameter = 1;       % m, Ground telescope aperture diameter (GUI "Rx Aperture")
+cfg.gs.ApertureDiameter = 1;       % m, Ground telescope aperture diameter
 cfg.gs.PointingError    = 1e-6;    % rad, Static/systematic pointing error (used by snapshot engine only)
 cfg.gs.JitterSigma      = 1.0e-6;  % rad, 1-sigma dynamic tracking jitter (used by continuous engine only)
 
 %% ---- 2. Satellite A (Orbital Ground-to-Space Terminal) ----
 cfg.satA.Height           = 550;   % km, Orbital altitude (LEO profile configuration)
 cfg.satA.OpticsEfficiency = 0.8;   % Optical efficiency of the payload terminal
-cfg.satA.ApertureDiameter = 0.07;  % m, Payload lens aperture diameter (GUI "Tx Aperture")
+cfg.satA.ApertureDiameter = 0.07;  % m, Payload lens aperture diameter
 cfg.satA.PointingError    = 1e-6;  % rad, Static/systematic pointing error (used by snapshot engine only)
 cfg.satA.JitterSigma      = 2.0e-6;  % rad, 1-sigma dynamic tracking jitter (used by continuous engine only)
 
-% Orbital Geometry Configuration
-% NOTE: FixedElevationAngle is used as THE pass elevation angle for the
-% whole snapshot/pass, not a minimum threshold. GUI label reflects this.
+% Orbital geometry configuration
 cfg.orbit.UseTLE = false;
-cfg.orbit.FixedElevationAngle = 50;  % deg, static fallback target when UseTLE is disabled
+cfg.orbit.WorstCaseElevationAngle = 20; % deg, evaluation angle for ground-space links
 cfg.orbit.TLE_Line1 = '';            % reserved for future TLE pass calculations
 cfg.orbit.TLE_Line2 = '';
 
@@ -38,6 +29,7 @@ cfg.orbit.TLE_Line2 = '';
 cfg.satB.OpticsEfficiency = 0.8;
 cfg.satB.ApertureDiameter = 0.06;  % m
 cfg.satB.PointingError    = 1e-6;  % rad
+cfg.satB.JitterSigma      = 2.0e-6; % rad, 1-sigma dynamic tracking jitter
 
 %% ---- 4. Link Layer Operational Parameters ----
 cfg.link.Wavelength        = 1550e-9;  % m, core carrier wavelength
@@ -59,6 +51,7 @@ cfg.link.BoresightBias = 0; % rad, constant systematic pointing offset used only
 %% ---- 5. Atmospheric Data API Gateway ----
 cfg.weather.Provider  = "open-meteo";  % Free API service, no access token keys required
 cfg.weather.UseLive   = true;          % Set false to bypass API and use manual parameters below
+cfg.weather.ContinuousMode = "Past Replay"; % "Past Replay" | "Current Hold"
 % Manual fallback defaults for offline evaluation or troubleshooting
 cfg.weather.Manual.VisibilityKm      = 10;
 cfg.weather.Manual.AttenuationType   = "clear"; % "clear" | "rain" | "snow"

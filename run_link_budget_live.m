@@ -1,17 +1,15 @@
 function run_link_budget_live(cfg)
 %% RUN_LINK_BUDGET_LIVE
-% Real-time weather API integrated optical link budget snapshot calculator
+% Computes a single optical link-budget snapshot.
 %
-% Leverages standard MathWorks "Optical Satellite Communication Link Budget Analysis"
-% equations while enhancing fidelity via two live environmental data inputs:
-%   1) Replaces static cloud-type lookup matrices with real-time empirical visibility arrays
-%   2) Automates attenuation categorization from live WMO weather condition indices
+% Selects terminal roles for downlink, uplink, or inter-satellite links;
+% resolves live or manual atmosphere data; calculates geometry, optical
+% gains, pointing loss, path loss, and link margin; and prints the result.
 %
 % Requirements: Satellite Communications Toolbox (fspl, slantRangeCircularOrbit)
 %
-% Reads the unified cfg schema defined in ogs_config.m (cfg.gs/satA/satB/
-% orbit/link/weather). See compute_atmospheric_loss.m for the shared
-% atmosphere physics also used by run_link_budget_continuous.m.
+% Configuration follows the cfg.gs/cfg.satA/cfg.satB/cfg.orbit/cfg.link/
+% cfg.weather schema returned by ogs_config.
 
 % Support both standalone manual operations and programmatic GUI callback functions
 if nargin < 1
@@ -41,13 +39,11 @@ visibility = w.VisibilityKm;               % Empirical visibility value in km
 link.AttenuationType = w.AttenuationType;   % Auto-resolved attenuation category ("clear"|"rain"|"snow")
 
 %% ---- 2. Orbital Path Geometry ----
-% NOTE: FixedElevationAngle is used as the fixed elevation angle for the
-% whole snapshot, not a minimum threshold (see ogs_config.m comment).
-% TLE-based time-varying elevation is not yet implemented.
+% Ground-space links are evaluated at the configured worst-case elevation.
 if isfield(cfg.orbit, 'UseTLE') && cfg.orbit.UseTLE
     error("TLE-based elevation tracking is not implemented yet. Set cfg.orbit.UseTLE = false.");
 end
-link.ElevationAngle = cfg.orbit.FixedElevationAngle;
+link.ElevationAngle = cfg.orbit.WorstCaseElevationAngle;
 
 %% ---- 3. Establish System Terminal Roles ----
 if link.Type=="downlink"
@@ -86,7 +82,7 @@ else % uplink / downlink atmospheric paths
 
     fprintf("\n===== LINK BUDGET SNAPSHOT RESULTS (%s) =====\n", upper(link.Type));
     fprintf("  Ground station coords : %.4f N, %.4f E\n", gs.Latitude, gs.Longitude);
-    fprintf("  Elevation angle       : %.1f deg\n", link.ElevationAngle);
+    fprintf("  Worst-case elevation  : %.1f deg\n", link.ElevationAngle);
     fprintf("  Slant range           : %.1f km\n", dGS/1e3);
     fprintf("  Visibility (Measured) : %.2f km\n", visibility);
     fprintf("  Attenuation type      : %s\n", link.AttenuationType);

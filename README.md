@@ -1,82 +1,255 @@
-# Optical Ground Station (OGS) Satellite Live Link Budget Simulator
+# Optical Ground Station Live Link Budget Simulator
 
-An interactive, multi-tab MATLAB dashboard built with modern UI components (`uifigure`) designed to evaluate the physical layer performance, signal margin, and tracking reliability of free-space optical (laser) communication links between a spacecraft terminal and an Optical Ground Station.
+A MATLAB dashboard for evaluating free-space optical links between an optical ground station and a satellite, or between two satellites. The simulator combines link geometry, telescope gains, pointing behavior, atmospheric attenuation, and receiver sensitivity to estimate link margin and outage performance.
 
-> **Changelog note:** The config schema, GUI field wiring, and continuous-tracking engine were reconciled to a single shared schema (`ogs_config.m`). Previously, most Hardware tab controls and the custom lat/lon fields had no effect on Single Snapshot results due to a config field-name mismatch, and Continuous Tracking mode ignored the Live/Manual weather switch and the Rayleigh/Rician dropdown. See inline comments in each `.m` file for specifics.
+## Requirements
 
----
+- MATLAB with support for `uifigure`
+- Satellite Communications Toolbox
+  - `fspl`
+  - `slantRangeCircularOrbit`
+- Internet access when **Live API** weather is selected
 
-## 🛠️ Operational Setup & Input Instructions
+Open-Meteo supplies the weather data and does not require an API key.
 
-The graphical user interface is organized into a clean, two-tab layout designed to isolate environmental orbit profiles from physical laser hardware tuning parameters.
+## Start the simulator
 
-### Tab 1: Scenario Settings
-Use this panel to define where the ground station is on Earth, how the satellite passes over it, and how atmospheric losses are evaluated.
+Open the MATLAB project or add this folder to the MATLAB path, then run:
 
-1. **Link Direction Dropdown:** Select the orientation of your laser link (`downlink`, `uplink`, or `inter-satellite`).
-2. **Pass Elevation Angle (deg):** Sets the fixed elevation angle used for the entire snapshot or pass (not a minimum threshold — the simulation does not currently model a satellite descending through multiple elevation angles over time; that requires TLE-based pass tracking, see Next Engineering Focus Areas). *Engineering tip: values **≥ 20°** avoid the thickest, high-loss layers of the lower atmosphere.*
-3. **Atmosphere Data Slider:** Toggle between **Live API** and **Manual**.
-   * **Live API:** Queries real-time local weather reports at your exact coordinates to dynamically scale atmospheric attenuation based on real-world humidity, cloud covers, or precipitations.
-   * **Manual:** Bypasses live data networks and uses the visibility/attenuation-type values set in `ogs_config.m` (`cfg.weather.Manual`), run through the same atmospheric scattering model as Live mode — not a fixed placeholder value.
-4. **Geodetic Coordinate Overrides:** Type exact numeric values into the **Station Latitude (°N)**, **Station Longitude (°E)**, and **Station Alt AMSL (m)** fields to pinpoint your custom ground telescope location anywhere on Earth.
-5. **Simulation Mode Button Group:** Select **Single Snapshot** for a quick static link budget analysis, or **Continuous Tracking** to model statistical mechanical vibrations over time.
-6. **Continuous Simulation Sub-settings:** Adjust the total pass timeline **Duration (seconds)** and choose between **Rayleigh (No Bias)** — zero mean pointing offset — or **Rician (With Bias)** — mean offset set by the Boresight Bias field on the Hardware tab.
+```matlab
+ogs_gui
+```
+
+The GUI creates a configuration from the selected controls and dispatches either the snapshot or continuous simulation engine.
+
+The engines can also be called directly:
+
+```matlab
+cfg = ogs_config();
+
+run_link_budget_live(cfg);
+run_link_budget_continuous(cfg, 60, 0.1, "Rayleigh (No Bias)");
+```
+
+The continuous function arguments are duration in seconds, sample interval in seconds, and jitter model. The GUI presents duration in minutes and converts it to seconds.
+
+## Link directions
+
+| Direction | Transmitter | Receiver | Distance and propagation |
+|---|---|---|---|
+| Downlink | Satellite A | Ground station | LEO slant range plus atmospheric loss |
+| Uplink | Ground station | Satellite A | LEO slant range plus atmospheric loss |
+| Inter-satellite | Satellite A | Satellite B | Configured satellite distance with no atmospheric loss |
+
+The GUI’s Tx and Rx aperture controls follow these transmitter and receiver roles. For inter-satellite simulations, the two jitter controls represent Satellite A and Satellite B.
+
+## Scenario Settings
+
+The Scenario Settings tab defines geometry, weather, location, and simulation behavior.
+
+1. **Link Direction** selects downlink, uplink, or inter-satellite operation.
+2. **Worst-case Elevation** is the single conservative elevation used for ground-space calculations. Snapshot and continuous modes evaluate the link at this angle. Inter-satellite links do not use elevation.
+3. **Atmosphere Data** selects:
+   - **Live API**, which uses Open-Meteo data for the entered ground-station coordinates.
+   - **Manual**, which uses `cfg.weather.Manual.VisibilityKm` and `cfg.weather.Manual.AttenuationType`.
+4. **Station Latitude, Longitude, and Altitude** define the ground-station location. GUI altitude is entered in metres and stored in kilometres.
+5. **Simulation Mode** selects:
+   - **Single Snapshot**
+   - **Continuous Tracking**
+6. **Continuous Simulation Sub-settings** define:
+   - Live weather timeline mode
+   - Rayleigh or Rician pointing jitter
+   - Duration from 1 to 60 minutes
 
 <p align="center">
-  <img src="images/gui_panel1.png" width="550" alt="Scenario Settings Control Panel Interface Map">
+  <img src="images/gui_panel1.png" width="550" alt="Scenario Settings tab">
   <br>
-  <em>Figure 1: Scenario Settings Configuration Interface.</em>
+  <em>Figure 1: Scenario and continuous-simulation controls.</em>
 </p>
 
----
+## Live weather timeline modes
 
-### Tab 2: Hardware Configuration
-Use this panel to adjust your physical layer hardware properties to overcome high atmospheric losses or pointing errors.
+The weather timeline selection applies to continuous ground-space simulations using Live API weather.
 
-1. **Tx Laser Power (W):** Controls the raw optical output power leaving the transmitter laser assembly.
-2. **Wavelength (nm):** Sets the operational laser wavelength (default is standard telecom `1550 nm`).
-3. **Tx / Rx Aperture Diameters (m):** Defines the structural sizing of your transmitter and receiver telescope optics. Expanding these elements narrows your beam divergence footprint and gathers more incoming photons.
-4. **Satellite Jitter / Ground Jitter (µrad):** Defines the mechanical tracking precision limits (fine pointing loop tracking errors) caused by spacecraft attitude adjustments or ground vibrations.
-5. **Boresight Bias (µrad):** Sets a constant angular alignment offset between the geometric centers of the laser beam and the receiver telescope.
+### Past Replay
+
+Past Replay retrieves the weather window ending at the latest available Open-Meteo 15-minute timestep. A 60-minute run requests five samples:
+
+```text
+-60 min  -45 min  -30 min  -15 min  latest
+```
+
+Atmospheric loss is calculated at every weather sample and linearly interpolated onto the continuous signal timeline. The graph uses historical UTC timestamps.
+
+### Current Hold
+
+Current Hold retrieves one current-weather sample and assumes the resulting atmospheric loss remains constant for the selected future duration. Pointing jitter continues to vary throughout the run. The graph uses projected UTC timestamps.
+
+Manual weather is constant for the complete run. Inter-satellite links bypass weather processing.
+
+If an Open-Meteo request fails, the weather functions issue a warning and use clear conditions with 10 km visibility.
+
+## Hardware Configuration
+
+The Hardware Configuration tab controls the optical terminals and pointing model.
+
+1. **Tx Laser Power** is entered in watts and converted to dBm.
+2. **Wavelength** is entered in nanometres and converted to metres.
+3. **Tx and Rx Aperture Diameters** determine transmitter divergence and terminal gains.
+4. **Terminal Jitter** supplies one-sigma angular jitter in microradians:
+   - Ground-space: satellite and ground-station jitter
+   - Inter-satellite: Satellite A and Satellite B jitter
+5. **Boresight Bias** supplies the constant angular offset used by the Rician model.
 
 <p align="center">
-  <img src="images/gui_panel2.png" width="550" alt="Hardware Configuration Panel Interface Map">
+  <img src="images/gui_panel2.png" width="550" alt="Hardware Configuration tab">
   <br>
-  <em>Figure 2: Hardware Configuration Parameter Adjustment Panel.</em>
+  <em>Figure 2: Optical hardware and pointing controls.</em>
 </p>
 
----
+## Single Snapshot
 
-## 📊 Real-World Benchmark Scenario & Result Analysis
+The snapshot engine evaluates one deterministic link condition.
 
-### 🌍 Validation Setup: SaTReC, KAIST
-* **Location:** KAIST Main Campus (Satellite Technology Research Center), Daejeon, South Korea
-* **Coordinates Inputted:** `36.37` deg N, `127.36` deg E, Altitude: `80` m
-* **Hardware Constraints Set:** Tx Power = `10 W`, Optics Apertures = `0.3 m`, Satellite Jitter = `2.0 µrad`, Ground Jitter = `1.0 µrad`, Boresight Bias = `0.0 µrad`.
+For ground-space links it:
 
-Clicking the **⚡ RUN LINK BUDGET** trigger button computes a dynamic time-series performance breakdown across your operational pass tracking window.
+1. Resolves current or manual weather.
+2. Calculates slant range at the worst-case elevation.
+3. Selects transmitter and receiver roles.
+4. Calculates telescope gains and static pointing losses.
+5. Calculates free-space and atmospheric losses.
+6. Prints the resulting margin and success status in the MATLAB Command Window.
+
+Inter-satellite snapshots use `cfg.link.SatDistance` and omit atmospheric loss.
+
+## Continuous Tracking
+
+The continuous engine combines a static link baseline with time-varying pointing loss.
+
+### Pointing models
+
+- **Rayleigh (No Bias):** two zero-mean Gaussian angular components produce radial pointing error.
+- **Rician (With Bias):** the x-axis component includes `cfg.link.BoresightBias`.
+
+Transmitter and receiver jitter combine as:
+
+```text
+sigma_total = sqrt(sigma_tx^2 + sigma_rx^2)
+```
+
+The radial angular error is converted to displacement at the receiver and applied to a diffraction-limited Gaussian beam.
+
+### Random sampling
+
+Each run initializes an internal shuffled random stream, so repeated simulations generate different pointing-jitter profiles. The simulator restores MATLAB’s caller random-generator state when the run finishes.
+
+## Link-budget model
+
+The terminal aperture gain is:
+
+```text
+G = 10 log10((pi D / lambda)^2)
+```
+
+The received-power baseline combines:
+
+```text
+Tx power
++ transmitter and receiver optical efficiency
++ transmitter and receiver aperture gain
+- free-space path loss
+- atmospheric loss
+```
+
+Link margin is received power minus `cfg.link.Preq`. A margin below `0 dB` is counted as an outage.
+
+### Atmospheric attenuation
+
+Ground-space atmospheric loss combines:
+
+- Constant molecular absorption
+- Visibility-based geometrical scattering
+  - Rain coefficient
+  - Snow coefficient
+  - Generalized Kim model for clear, cloudy, fog, haze, and other visibility-driven conditions
+- Mie scattering based on wavelength, station altitude, and elevation
+
+Open-Meteo WMO weather codes are classified as `clear`, `rain`, or `snow` before selecting the geometrical-scattering model.
+
+## Continuous results
 
 <p align="center">
-  <img src="images/simulation_result.png" width="600" alt="Continuous Dynamic Performance Simulation Analytics Output">
+  <img src="images/simulation_result.png" width="600" alt="Continuous simulation analytics">
   <br>
-  <em>Figure 3: Analytics Output for a Cloud-Free Continuous Passing Over KAIST.</em>
+  <em>Figure 3: Continuous link-margin and outage analytics.</em>
 </p>
 
----
+The analytics figure contains three views:
 
-### Detailed Graph Interpretation Guide
+### Dynamic Margin Profile
 
-When assessing your generated analytics window, evaluate the three core subplots to verify link reliability:
+The top plot shows link margin over the selected timeline. The red dashed line marks the `0 dB` outage threshold.
 
-#### 1. Dynamic Margin Profile (Top Main Timeline Plot)
-* **What it shows:** A continuous tracking array mapping the calculated link margin (in dB) across your execution window against a strict horizontal red dashed **Link Outage Threshold (0 dB)** line.
-* **How to interpret:** The high-frequency jagged variations represent real-time fine pointing tracking dropouts caused by mechanical vibrations ($\sigma_{\text{sat}}, \sigma_{\text{ogs}}$). As long as the blue line rides securely **above 0 dB**, your link maintains complete data packet lock. Any dip **below 0 dB** represents a link blackout where received photons fall below your detector's optical sensitivity limit ($P_{\text{req}}$).
+- Above `0 dB`: received power exceeds the required sensitivity.
+- Below `0 dB`: the sample is in outage.
 
-#### 2. Margin Probability Density Function (Bottom-Left Histogram)
-* **What it shows:** A statistical histogram illustrating the probability distribution profile of your signal margins throughout the satellite's pass.
-* **How to interpret:** A centered, narrow bell curve clustered deep within positive values (e.g., **+30 to +40 dB**) indicates an exceptionally stable pointing lock. If you introduce a **Boresight Bias**, the entire histogram distribution moves left toward the danger zone, providing a visual gauge of your system's alignment safety margins.
+The green dash-dot reference line shows the margin for the same geometry and hardware with atmospheric and jitter losses removed. For inter-satellite links, which do not use atmospheric loss, the reference removes jitter loss only. The gap between the reference and the simulated profile shows the combined margin reduction from those disturbances.
 
-#### 3. Calculated Link Outage Rate (Bottom-Right Bar Chart)
-* **What it shows:** An aggregated summary bar presenting the exact percentage of total tracking time that your link suffered a blackout (Margin **< 0 dB**).
-* **How to interpret:** * **0.0% Outage:** Engineering optimum. Your hardware configuration successfully clears all atmospheric attenuations and mechanical pointing vibrations.
-  * **Greater than 0% Outage:** This represents immediate data loss. If you get a high outage rate (e.g., **80% - 100%**) when using the **Live API** mode during rainy conditions in Daejeon, it means the physical clouds are scattering your optical beam. To fix this, switch your site coordinates to an alternative, clear-weather ground station location or toggle to **Manual** mode to isolate and test your raw mechanical tracking properties under clear skies.
+For Past Replay and Current Hold, the horizontal axis contains UTC timestamps. Manual-weather and inter-satellite runs use elapsed seconds.
+
+### Margin Probability Density
+
+The lower-left histogram shows the distribution of margin samples. A wider distribution indicates greater pointing-loss variation. Boresight bias generally shifts the distribution toward lower margins.
+
+### Outage Rate
+
+The lower-right chart reports the percentage of timeline samples with margin below `0 dB`.
+
+## Configuration structure
+
+`ogs_config.m` returns the shared configuration used by the GUI and both engines.
+
+| Structure | Purpose |
+|---|---|
+| `cfg.gs` | Ground-station coordinates, altitude, optics, pointing error, and jitter |
+| `cfg.satA` | Primary satellite altitude, optics, pointing error, and jitter |
+| `cfg.satB` | Inter-satellite receiver optics, pointing error, and jitter |
+| `cfg.orbit` | Worst-case elevation and reserved TLE fields |
+| `cfg.link` | Direction, wavelength, power, sensitivity, distance, absorption, and bias |
+| `cfg.weather` | Live/manual selection, continuous timeline mode, and manual weather |
+
+Important unit conventions:
+
+| Field | Unit |
+|---|---|
+| `cfg.gs.Height` | km |
+| `cfg.satA.Height` | km |
+| `cfg.link.SatDistance` | km |
+| `cfg.link.Wavelength` | m |
+| `cfg.link.Ptx` | dBm |
+| `cfg.link.Preq` | dBm |
+| Pointing error, jitter, and bias fields | rad |
+
+## Source files
+
+| File | Responsibility |
+|---|---|
+| `ogs_gui.m` | Builds the GUI, maps controls to configuration, and launches simulations |
+| `ogs_config.m` | Defines default ground station, satellites, link, orbit, and weather settings |
+| `run_link_budget_live.m` | Computes and prints a single link-budget snapshot |
+| `run_link_budget_continuous.m` | Generates randomized pointing-error timelines, margin plots, and outage statistics |
+| `fetch_live_weather.m` | Retrieves the latest Open-Meteo conditions |
+| `fetch_weather_history.m` | Retrieves the recent 15-minute weather window |
+| `classify_attenuation.m` | Maps WMO weather codes to clear, rain, or snow attenuation |
+| `compute_atmospheric_loss.m` | Calculates shared geometrical, Mie, and absorption losses |
+
+## Model scope
+
+- Ground-space geometry uses one user-selected worst-case elevation for the complete calculation.
+- TLE-based time-varying elevation is not implemented.
+- Satellite A uses a configured circular-orbit altitude.
+- Inter-satellite range is a fixed configured distance.
+- Open-Meteo supplies model data rather than direct measurements from a dedicated station at the entered coordinates.
+- Historical weather replay uses 15-minute samples and interpolates atmospheric loss across the signal timeline.
+- Current Hold assumes weather remains unchanged for the selected future duration.
+- The continuous engine models pointing jitter statistically; it does not model satellite attitude-control dynamics or temporal jitter correlation.
