@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ogs-linkbudget-live"
+version = "2.1.0"
+description = "Optical ground-station and inter-satellite link-budget simulator"
+readme = "python/README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "reptide", email = "euisun2003@gmail.com" },
+]
+dependencies = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: MacOS X",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/reptide/ogs-linkbudget-live"
+Repository = "https://github.com/reptide/ogs-linkbudget-live"
+Issues = "https://github.com/reptide/ogs-linkbudget-live/issues"
+
+[project.scripts]
+ogs-linkbudget = "ogs_linkbudget.gui:launch"
+
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["ogs_linkbudget*"]

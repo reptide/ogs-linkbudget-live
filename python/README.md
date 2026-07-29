@@ -26,6 +26,15 @@ On Windows, use this command if `python3` is not recognized:
 py python\run.py
 ```
 
+## Install from PyPI
+
+The packaged application can be installed and launched with:
+
+```bash
+python3 -m pip install ogs-linkbudget-live
+ogs-linkbudget
+```
+
 ## Features
 
 - Downlink, uplink, and inter-satellite links
@@ -43,7 +52,7 @@ Each continuous run creates a fresh random jitter sequence. No seed is requested
 The Scenario Settings tab selects the link direction, conservative elevation, weather source, station location, simulation mode, weather timeline, pointing model, and duration.
 
 <p align="center">
-  <img src="../images/python/python_gui_panel1.png" width="550" alt="Python Scenario Settings tab">
+  <img src="https://raw.githubusercontent.com/reptide/ogs-linkbudget-live/main/images/python/python_gui_panel1.png" width="550" alt="Python Scenario Settings tab">
   <br>
   <em>Python scenario and continuous-simulation controls.</em>
 </p>
@@ -51,7 +60,7 @@ The Scenario Settings tab selects the link direction, conservative elevation, we
 The Hardware Configuration tab defines transmitter power, wavelength, terminal apertures, jitter, and optional Rician boresight bias.
 
 <p align="center">
-  <img src="../images/python/python_gui_panel2.png" width="550" alt="Python Hardware Configuration tab">
+  <img src="https://raw.githubusercontent.com/reptide/ogs-linkbudget-live/main/images/python/python_gui_panel2.png" width="550" alt="Python Hardware Configuration tab">
   <br>
   <em>Python optical hardware and pointing controls.</em>
 </p>
@@ -59,7 +68,7 @@ The Hardware Configuration tab defines transmitter power, wavelength, terminal a
 Continuous simulations display the randomized link-margin profile, the ideal no-weather/no-jitter reference, the `0 dB` outage threshold, the margin probability density, and the calculated outage rate.
 
 <p align="center">
-  <img src="../images/python/python_simulation_result.png" width="700" alt="Python continuous simulation analytics">
+  <img src="https://raw.githubusercontent.com/reptide/ogs-linkbudget-live/main/images/python/python_simulation_result.png" width="700" alt="Python continuous simulation analytics">
   <br>
   <em>Python continuous link-margin and outage analytics.</em>
 </p>
