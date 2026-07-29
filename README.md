@@ -1,18 +1,35 @@
 # Optical Ground Station Live Link Budget Simulator
 
-A MATLAB dashboard for evaluating free-space optical links between an optical ground station and a satellite, or between two satellites. The simulator combines link geometry, telescope gains, pointing behavior, atmospheric attenuation, and receiver sensitivity to estimate link margin and outage performance.
+A MATLAB and standard-library Python dashboard for evaluating free-space optical links between an optical ground station and a satellite, or between two satellites. Both applications combine link geometry, telescope gains, pointing behavior, atmospheric attenuation, and receiver sensitivity to estimate link margin and outage performance.
 
-## Requirements
+## Choose an application
 
-- MATLAB with support for `uifigure`
-- Satellite Communications Toolbox
-  - `fspl`
-  - `slantRangeCircularOrbit`
-- Internet access when **Live API** weather is selected
+The repository contains two parallel implementations:
 
-Open-Meteo supplies the weather data and does not require an API key.
+| Application | Requirements | Start command |
+|---|---|---|
+| MATLAB | MATLAB with `uifigure` and Satellite Communications Toolbox | `ogs_gui` |
+| Python | Python 3.10+ with Tkinter; no third-party packages | `python3 python/run.py` |
 
-## Start the simulator
+Open-Meteo supplies live and historical weather data to both applications and does not require an API key. Internet access is only required when **Live API** weather is selected.
+
+Users without MATLAB can download the repository ZIP, extract it, open a terminal in the extracted folder, and run the Python command above. On Windows, `py python\run.py` can be used when `python3` is unavailable. See [python/README.md](python/README.md) for Python-specific instructions and tests.
+
+### Python interface
+
+<p align="center">
+  <img src="images/python/python_gui_panel1.png" width="450" alt="Python Scenario Settings tab">
+  <br>
+  <em>Python scenario and continuous-simulation controls.</em>
+</p>
+
+<p align="center">
+  <img src="images/python/python_simulation_result.png" width="650" alt="Python continuous simulation analytics">
+  <br>
+  <em>Python continuous link-margin, reference, distribution, and outage views.</em>
+</p>
+
+## Start the MATLAB simulator
 
 Open the MATLAB project or add this folder to the MATLAB path, then run:
 
@@ -64,7 +81,7 @@ The Scenario Settings tab defines geometry, weather, location, and simulation be
 <p align="center">
   <img src="images/gui_panel1.png" width="550" alt="Scenario Settings tab">
   <br>
-  <em>Figure 1: Scenario and continuous-simulation controls.</em>
+  <em>Figure 1: MATLAB scenario and continuous-simulation controls.</em>
 </p>
 
 ## Live weather timeline modes
@@ -104,7 +121,7 @@ The Hardware Configuration tab controls the optical terminals and pointing model
 <p align="center">
   <img src="images/gui_panel2.png" width="550" alt="Hardware Configuration tab">
   <br>
-  <em>Figure 2: Optical hardware and pointing controls.</em>
+  <em>Figure 2: MATLAB optical hardware and pointing controls.</em>
 </p>
 
 ## Single Snapshot
@@ -181,7 +198,7 @@ Open-Meteo WMO weather codes are classified as `clear`, `rain`, or `snow` before
 <p align="center">
   <img src="images/simulation_result.png" width="600" alt="Continuous simulation analytics">
   <br>
-  <em>Figure 3: Continuous link-margin and outage analytics.</em>
+  <em>Figure 3: MATLAB continuous link-margin and outage analytics.</em>
 </p>
 
 The analytics figure contains three views:
@@ -242,6 +259,9 @@ Important unit conventions:
 | `fetch_weather_history.m` | Retrieves the recent 15-minute weather window |
 | `classify_attenuation.m` | Maps WMO weather codes to clear, rain, or snow attenuation |
 | `compute_atmospheric_loss.m` | Calculates shared geometrical, Mie, and absorption losses |
+| `python/run.py` | Launches the Python desktop application |
+| `python/ogs_linkbudget/` | Contains the Python configuration, physics, weather, simulation, GUI, and chart modules |
+| `python/tests/` | Verifies the Python geometry and simulation behavior without network access |
 
 ## Model scope
 
