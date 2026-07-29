@@ -29,6 +29,9 @@ codegen/
 # Cache files
 *.slxc
 
+# macOS metadata
+.DS_Store
+
 # Cloud based storage dotfile
 .MATLABDriveTag
 
