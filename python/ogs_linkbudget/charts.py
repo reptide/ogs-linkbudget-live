@@ -131,8 +131,13 @@ class AnalyticsWindow(tk.Toplevel):
     def _draw_margin(self, rect: tuple[float, float, float, float]) -> None:
         margins = self.result.margins_db
         ideal = self.result.ideal_margin_db
-        y_min = max(-100.0, min(min(margins), 0.0, ideal) - 10.0)
-        y_max = max(20.0, max(max(margins), 0.0, ideal) + 10.0)
+        outage_margin = self.result.outage_margin_db
+        y_min = max(
+            -100.0, min(min(margins), 0.0, outage_margin, ideal) - 10.0
+        )
+        y_max = max(
+            20.0, max(max(margins), 0.0, outage_margin, ideal) + 10.0
+        )
         y_values = self._ticks(y_min, y_max)
         y_ticks = [(value, f"{value:.0f}") for value in y_values]
         x_end = self.result.elapsed_seconds[-1]
@@ -154,12 +159,27 @@ class AnalyticsWindow(tk.Toplevel):
         def y_pixel(value: float) -> float:
             return self._map(value, y_min, y_max, bottom, top)
 
-        zero_y = y_pixel(0.0)
-        self.canvas.create_line(left, zero_y, right, zero_y, fill="red", dash=(8, 5), width=2)
+        if outage_margin != 0.0:
+            zero_y = y_pixel(0.0)
+            self.canvas.create_line(
+                left, zero_y, right, zero_y, fill="#777777", dash=(3, 4)
+            )
+            self.canvas.create_text(
+                right - 4,
+                zero_y + 10,
+                text="Receiver Sensitivity Boundary (0 dB)",
+                fill="#666666",
+                anchor="e",
+            )
+
+        outage_y = y_pixel(outage_margin)
+        self.canvas.create_line(
+            left, outage_y, right, outage_y, fill="red", dash=(8, 5), width=2
+        )
         self.canvas.create_text(
             right - 4,
-            zero_y - 9,
-            text="Outage Threshold (0 dB)",
+            outage_y - 9,
+            text=f"Operational Outage Threshold ({outage_margin:g} dB)",
             fill="red",
             anchor="e",
         )
@@ -235,7 +255,10 @@ class AnalyticsWindow(tk.Toplevel):
     def _draw_outage(self, rect: tuple[float, float, float, float]) -> None:
         plot = self._axes(
             rect,
-            "Calculated Link Outage Rate",
+            (
+                "Calculated Link Outage Rate "
+                f"(< {self.result.outage_margin_db:g} dB)"
+            ),
             "Time in Outage (%)",
             "Outage (%)",
             [(0.5, "")],

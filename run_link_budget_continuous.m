@@ -1,12 +1,9 @@
-function run_link_budget_continuous(cfg, duration, timeStep, jitterModel)
+function run_link_budget_continuous(cfg, duration, timeStep, txJitterProfile, rxJitterProfile)
 %RUN_LINK_BUDGET_CONTINUOUS Simulates link margin under dynamic pointing jitter.
 %
-%   run_link_budget_continuous(cfg, duration, timeStep, jitterModel)
-%
-%   The function selects ground-space or inter-satellite terminal roles,
-%   calculates path and propagation losses, samples two-axis pointing errors,
-%   and plots the resulting margin distribution and outage rate. Rayleigh
-%   mode uses zero mean offset; Rician mode applies BoresightBias.
+% The function selects ground-space or inter-satellite terminal roles,
+% calculates path and propagation losses, generates independent two-axis
+% terminal motion, and plots the margin distribution and outage rate.
 
     if nargin < 1 || isempty(cfg)
         try
@@ -15,28 +12,40 @@ function run_link_budget_continuous(cfg, duration, timeStep, jitterModel)
             cfg = ogs_config();
         end
     end
-    if nargin < 2 || isempty(duration),  duration = 60;  end
-    if nargin < 3 || isempty(timeStep),  timeStep = 0.1; end
-    if nargin < 4 || isempty(jitterModel), jitterModel = 'Rayleigh (No Bias)'; end
+    if nargin < 2 || isempty(duration), duration = 60; end
+    if nargin < 3 || isempty(timeStep), timeStep = 0.1; end
+    if nargin < 4 || isempty(txJitterProfile), txJitterProfile = 'Configured Random'; end
+    if nargin < 5 || isempty(rxJitterProfile), rxJitterProfile = txJitterProfile; end
 
-    gs   = cfg.gs;
+    legacyRician = contains(txJitterProfile, 'Rician', 'IgnoreCase', true);
+    if contains(txJitterProfile, 'Rayleigh', 'IgnoreCase', true) || legacyRician
+        txJitterProfile = 'Configured Random';
+        rxJitterProfile = 'Configured Random';
+    end
+    if contains(string(txJitterProfile), "Micius", 'IgnoreCase', true) || ...
+            contains(string(rxJitterProfile), "Micius", 'IgnoreCase', true)
+        timeStep = min(timeStep, 0.004);
+    elseif contains(string(txJitterProfile), "OLYMPUS", 'IgnoreCase', true) || ...
+            contains(string(rxJitterProfile), "OLYMPUS", 'IgnoreCase', true)
+        timeStep = min(timeStep, 0.005);
+    end
+
+    gs = cfg.gs;
     satA = cfg.satA;
-    satB = cfg.satB;
     link = cfg.link;
-
     if link.Type == "uplink"
         tx = gs;
         rx = satA;
     elseif link.Type == "inter-satellite"
         tx = satA;
-        rx = satB;
+        rx = cfg.satB;
     else
         tx = satA;
         rx = gs;
     end
 
     t = 0:timeStep:duration;
-    N = length(t);
+    N = numel(t);
     plotTime = t;
     plotTimeLabel = 'Time (Seconds)';
 
@@ -44,55 +53,57 @@ function run_link_budget_continuous(cfg, duration, timeStep, jitterModel)
     restoreRng = onCleanup(@() rng(callerRngState));
     rng('shuffle');
 
-    %% ---- 1. Physical layer configuration ----
-    lambda = link.Wavelength;             % m
-    D_tx = tx.ApertureDiameter;           % m
-    D_rx = rx.ApertureDiameter;           % m
-
-    sigma_tx = tx.JitterSigma;             % rad, transmitter tracking jitter
-    sigma_rx = rx.JitterSigma;             % rad, receiver tracking jitter
-
-    isRician = contains(jitterModel, 'Rician', 'IgnoreCase', true);
-    if isRician
-        theta_bias = link.BoresightBias;  % rad, nonzero mean offset
-    else
-        theta_bias = 0;                   % Rayleigh: zero mean by definition
+    lambda = link.Wavelength;
+    D_tx = tx.ApertureDiameter;
+    D_rx = rx.ApertureDiameter;
+    sigma_tx = tx.JitterSigma;
+    sigma_rx = rx.JitterSigma;
+    txSuppressionDB = link.TxJitterSuppressionDB;
+    rxSuppressionDB = link.RxJitterSuppressionDB;
+    outageMarginDB = link.OutageMarginDB;
+    if txSuppressionDB < 0 || rxSuppressionDB < 0
+        error('Jitter suppression values must be nonnegative.');
+    end
+    if outageMarginDB < 0
+        error('Required operational margin must be nonnegative.');
     end
 
-    %% ---- 2. Link geometry ----
     if link.Type == "inter-satellite"
         elevationAngle = NaN;
-        L_space = link.SatDistance * 1e3;  % km -> m
+        L_space = link.SatDistance * 1e3;
     else
         elevationAngle = cfg.orbit.WorstCaseElevationAngle;
-        L_space = slantRangeCircularOrbit(elevationAngle, satA.Height*1e3, gs.Height*1e3); % meters
+        L_space = slantRangeCircularOrbit( ...
+            elevationAngle, satA.Height*1e3, gs.Height*1e3);
     end
+    divergence = 1.22 * lambda / D_tx;
+    beamRadius = L_space * divergence;
 
-    %% ---- 3. Beam divergence / footprint at the receiver ----
-    theta_div = 1.22 * lambda / D_tx;      % diffraction-limited half-angle, rad
-    w_z = L_space * theta_div;             % beam footprint radius at receiver, m
+    thetaBias = link.BoresightBias;
+    if nargin < 5 && ~legacyRician
+        thetaBias = 0;
+    end
+    [txX, txY, txProfileInfo] = generate_terminal_jitter( ...
+        txJitterProfile, sigma_tx, timeStep, N);
+    [rxX, rxY, rxProfileInfo] = generate_terminal_jitter( ...
+        rxJitterProfile, sigma_rx, timeStep, N);
+    txScale = 10^(-txSuppressionDB/20);
+    rxScale = 10^(-rxSuppressionDB/20);
+    angularError = hypot( ...
+        thetaBias + txX*txScale + rxX*rxScale, ...
+        txY*txScale + rxY*rxScale);
+    displacement = L_space * angularError;
+    trackingLossDB = 10*log10(max( ...
+        exp(-2*(displacement.^2)/(beamRadius^2)), 1e-30));
 
-    sigma_total = sqrt(sigma_tx^2 + sigma_rx^2);
-    if sigma_total == 0, sigma_total = 1e-9; end % avoid zero-division
-
-    %% ---- 4. Generate random tracking misalignments across the pass ----
-    x_error = theta_bias + sigma_total * randn(1, N);
-    y_error = sigma_total * randn(1, N);
-    theta_pointing = sqrt(x_error.^2 + y_error.^2);  % radial tracking offset, rad
-    r_displacement = L_space * theta_pointing;        % m
-
-    L_tracking_raw = exp(-2 * (r_displacement.^2) / (w_z^2));
-    L_tracking_dB = 10 * log10(max(L_tracking_raw, 1e-30)); % floor at -300 dB
-
-    %% ---- 5. Atmospheric loss ----
     if link.Type == "inter-satellite"
-        L_atm_dB = 0;
+        atmosphereLossDB = 0;
         fprintf("Continuous sim path: INTER-SATELLITE (%.1f km, no atmospheric loss)\n", ...
             link.SatDistance);
     elseif cfg.weather.UseLive
         if string(cfg.weather.ContinuousMode) == "Current Hold"
             weather = fetch_live_weather(gs.Latitude, gs.Longitude);
-            L_atm_dB = compute_atmospheric_loss( ...
+            atmosphereLossDB = compute_atmospheric_loss( ...
                 weather.VisibilityKm, weather.AttenuationType, elevationAngle, ...
                 gs.Height, lambda, link.TroposphereHeight, link.AbsorptionLoss);
             windowStart = datetime('now', 'TimeZone', 'UTC');
@@ -108,9 +119,8 @@ function run_link_budget_continuous(cfg, duration, timeStep, jitterModel)
                     weather.VisibilityKm(k), weather.AttenuationType(k), elevationAngle, ...
                     gs.Height, lambda, link.TroposphereHeight, link.AbsorptionLoss);
             end
-
-            L_atm_dB = interp1(weather.RelativeTimeSeconds, sampleLossDB, t, ...
-                'linear', 'extrap');
+            atmosphereLossDB = interp1( ...
+                weather.RelativeTimeSeconds, sampleLossDB, t, 'linear', 'extrap');
             plotTime = weather.TimeUTC(end) - seconds(duration) + seconds(t);
             plotTimeLabel = 'Historical Time (UTC)';
             fprintf("Continuous sim atmosphere: PAST REPLAY (%d samples, %s to %s UTC)\n", ...
@@ -119,70 +129,76 @@ function run_link_budget_continuous(cfg, duration, timeStep, jitterModel)
         end
     else
         visibility = cfg.weather.Manual.VisibilityKm;
-        attenuationType = cfg.weather.Manual.AttenuationType;
-        fprintf("Continuous sim atmosphere: MANUAL (%.2f km visibility, %s)\n", visibility, attenuationType);
-        L_atm_dB = compute_atmospheric_loss(visibility, attenuationType, elevationAngle, ...
-            gs.Height, lambda, link.TroposphereHeight, link.AbsorptionLoss);
+        attenuation = cfg.weather.Manual.AttenuationType;
+        fprintf("Continuous sim atmosphere: MANUAL (%.2f km visibility, %s)\n", ...
+            visibility, attenuation);
+        atmosphereLossDB = compute_atmospheric_loss( ...
+            visibility, attenuation, elevationAngle, gs.Height, lambda, ...
+            link.TroposphereHeight, link.AbsorptionLoss);
     end
 
-    %% ---- 6. Static baseline margin (dBm-consistent) ----
-    FSPL_dB = fspl(L_space, lambda);  % positive-convention path loss, dB
-    G_tx = 10*log10((pi*D_tx/lambda)^2);
-    G_rx = 10*log10((pi*D_rx/lambda)^2);
+    pathLossDB = fspl(L_space, lambda);
+    txGainDB = 10*log10((pi*D_tx/lambda)^2);
+    rxGainDB = 10*log10((pi*D_rx/lambda)^2);
+    idealReceivedDBm = link.Ptx + 10*log10(tx.OpticsEfficiency) + ...
+        10*log10(rx.OpticsEfficiency) + txGainDB + rxGainDB - pathLossDB;
+    idealMarginDB = idealReceivedDBm - link.Preq;
+    baselineMarginDB = idealReceivedDBm - atmosphereLossDB - link.Preq;
+    marginProfile = baselineMarginDB + trackingLossDB;
+    outageRate = 100 * sum(marginProfile < outageMarginDB) / N;
 
-    P_rx_ideal_dBm = link.Ptx + 10*log10(tx.OpticsEfficiency) + ...
-        10*log10(rx.OpticsEfficiency) + G_tx + G_rx - FSPL_dB;
-    ideal_margin_dB = P_rx_ideal_dBm - link.Preq;
-
-    P_rx_baseline_dBm = P_rx_ideal_dBm - L_atm_dB;
-    base_margin_dB = P_rx_baseline_dBm - link.Preq;
-
-    %% ---- 7. Full dynamic timeline ----
-    margin_profile = base_margin_dB + L_tracking_dB;
-    outage_indices = margin_profile < 0;
-    outage_rate = (sum(outage_indices) / N) * 100;
-
-    %% ---- 8. Render analytics ----
-    fig = findobj('Type', 'figure', 'Name', 'Continuous Dynamic Performance Simulation Analytics');
+    fig = findobj('Type', 'figure', ...
+        'Name', 'Continuous Dynamic Performance Simulation Analytics');
     if isempty(fig)
         fig = figure('Name', 'Continuous Dynamic Performance Simulation Analytics', ...
             'Position', [450, 80, 900, 700]);
     else
-        figure(fig); clf(fig);
+        figure(fig);
+        clf(fig);
         fig.Position = [450, 80, 900, 700];
     end
-
     layout = tiledlayout(fig, 2, 2, 'TileSpacing', 'loose', 'Padding', 'loose');
 
     marginAxes = nexttile(layout, [1, 2]);
-    plot(marginAxes, plotTime, margin_profile, 'b-', 'LineWidth', 1.5);
+    plot(marginAxes, plotTime, marginProfile, 'b-', 'LineWidth', 1.5);
     hold(marginAxes, 'on');
-    yline(marginAxes, 0, 'r--', 'Link Outage Threshold (Margin=0 dB)', ...
+    if outageMarginDB ~= 0
+        yline(marginAxes, 0, ':', 'Receiver Sensitivity Boundary (0 dB)', ...
+            'Color', [0.45 0.45 0.45], 'LineWidth', 1, ...
+            'LabelHorizontalAlignment', 'right', 'LabelVerticalAlignment', 'bottom');
+    end
+    yline(marginAxes, outageMarginDB, 'r--', sprintf( ...
+        'Operational Outage Threshold (%.1f dB)', outageMarginDB), ...
         'LineWidth', 1.5, 'LabelHorizontalAlignment', 'right');
     if link.Type == "inter-satellite"
-        referenceLabel = sprintf('Reference: No Jitter Loss (%.1f dB)', ideal_margin_dB);
+        referenceLabel = sprintf('Reference: No Jitter Loss (%.1f dB)', idealMarginDB);
     else
         referenceLabel = sprintf( ...
-            'Reference: No Atmospheric/Jitter Loss (%.1f dB)', ideal_margin_dB);
+            'Reference: No Atmospheric/Jitter Loss (%.1f dB)', idealMarginDB);
     end
-    yline(marginAxes, ideal_margin_dB, '-.', referenceLabel, ...
+    yline(marginAxes, idealMarginDB, '-.', referenceLabel, ...
         'Color', [0.00 0.50 0.15], 'LineWidth', 1.5, ...
         'LabelHorizontalAlignment', 'left', 'LabelVerticalAlignment', 'bottom');
     grid(marginAxes, 'on');
     if link.Type == "inter-satellite"
-        title(marginAxes, sprintf('Dynamic Margin Profile (Model: %s)', jitterModel));
+        title(marginAxes, sprintf( ...
+            'Dynamic Margin Profile (Tx: %s, %.1f dB; Rx: %s, %.1f dB)', ...
+            txProfileInfo.DisplayName, txSuppressionDB, ...
+            rxProfileInfo.DisplayName, rxSuppressionDB));
     else
-        title(marginAxes, sprintf('Dynamic Margin Profile (Model: %s, Worst-case Elevation: %.1f deg)', ...
-            jitterModel, elevationAngle));
+        title(marginAxes, sprintf( ...
+            'Dynamic Margin Profile (Tx: %s, %.1f dB; Rx: %s, %.1f dB; Elevation: %.1f deg)', ...
+            txProfileInfo.DisplayName, txSuppressionDB, ...
+            rxProfileInfo.DisplayName, rxSuppressionDB, elevationAngle));
     end
     xlabel(marginAxes, plotTimeLabel);
     ylabel(marginAxes, 'Link Margin Availability (dB)');
-    profileMinimum = min([margin_profile, 0, ideal_margin_dB]);
-    profileMaximum = max([margin_profile, 0, ideal_margin_dB]);
+    profileMinimum = min([marginProfile, 0, outageMarginDB, idealMarginDB]);
+    profileMaximum = max([marginProfile, 0, outageMarginDB, idealMarginDB]);
     ylim(marginAxes, [max(-100, profileMinimum-10), max(20, profileMaximum+10)]);
 
     pdfAxes = nexttile(layout);
-    histogram(pdfAxes, margin_profile, 'Normalization', 'pdf', ...
+    histogram(pdfAxes, marginProfile, 'Normalization', 'pdf', ...
         'FaceColor', [0.4660 0.6740 0.1880], 'EdgeColor', 'k');
     grid(pdfAxes, 'on');
     title(pdfAxes, 'Margin Probability Density Function (PDF)');
@@ -190,12 +206,14 @@ function run_link_budget_continuous(cfg, duration, timeStep, jitterModel)
     ylabel(pdfAxes, 'PDF');
 
     outageAxes = nexttile(layout);
-    bar(outageAxes, 1, outage_rate, 0.4, 'FaceColor', [0.8500 0.3250 0.0980]);
+    bar(outageAxes, 1, outageRate, 0.4, ...
+        'FaceColor', [0.8500 0.3250 0.0980]);
     grid(outageAxes, 'on');
     set(outageAxes, 'XTick', 1, 'XTickLabel', {'Time in Outage (%)'});
-    title(outageAxes, 'Calculated Link Outage Rate');
+    title(outageAxes, sprintf( ...
+        'Calculated Link Outage Rate (< %.1f dB)', outageMarginDB));
     ylabel(outageAxes, 'Time in Outage (%)');
     ylim(outageAxes, [0 100]);
-    text(outageAxes, 1, min(outage_rate + 5, 95), sprintf('%.1f%%', outage_rate), ...
+    text(outageAxes, 1, min(outageRate + 5, 95), sprintf('%.1f%%', outageRate), ...
         'HorizontalAlignment', 'center', 'FontWeight', 'bold');
 end

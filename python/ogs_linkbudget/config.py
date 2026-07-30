@@ -31,8 +31,11 @@ class LinkConfig:
     link_type: str = "downlink"
     transmit_power_dbm: float = 17.5
     required_power_dbm: float = -35.5
+    outage_margin_db: float = 3.0
     absorption_loss_db: float = 0.01
     boresight_bias_rad: float = 0.0
+    tx_jitter_suppression_db: float = 0.0
+    rx_jitter_suppression_db: float = 0.0
 
 
 @dataclass

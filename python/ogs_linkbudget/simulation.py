@@ -7,6 +7,12 @@ import math
 import random
 
 from .config import SimulatorConfig, Terminal
+from .jitter import (
+    CONFIGURED_RANDOM,
+    generate_terminal_jitter,
+    recommended_time_step,
+    suppression_amplitude_scale,
+)
 from .physics import (
     aperture_gain_db,
     aperture_gain_linear,
@@ -23,6 +29,7 @@ class SnapshotResult:
     link_type: str
     margin_db: float
     ideal_margin_db: float
+    outage_margin_db: float
     path_loss_db: float
     distance_km: float
     atmospheric_loss_db: float
@@ -34,7 +41,7 @@ class SnapshotResult:
 
     @property
     def successful(self) -> bool:
-        return self.margin_db > 0.0
+        return self.margin_db >= self.outage_margin_db
 
 
 @dataclass
@@ -45,8 +52,14 @@ class ContinuousResult:
     time_axis_label: str
     margins_db: list[float]
     ideal_margin_db: float
+    outage_margin_db: float
     outage_rate_pct: float
     jitter_model: str
+    tx_jitter_profile: str
+    rx_jitter_profile: str
+    tx_jitter_suppression_db: float
+    rx_jitter_suppression_db: float
+    time_step_seconds: float
     elevation_deg: float | None
     weather_description: str
 
@@ -95,6 +108,8 @@ def _ideal_margin(
 
 def run_snapshot(config: SimulatorConfig) -> SnapshotResult:
     """Calculate one deterministic link-budget condition."""
+    if config.link.outage_margin_db < 0.0:
+        raise ValueError("Required operational margin cannot be negative.")
     transmitter, receiver = _terminals(config)
     distance_m, elevation = _distance_m(config)
     ideal_margin, path_loss = _ideal_margin(config, transmitter, receiver, distance_m)
@@ -140,6 +155,7 @@ def run_snapshot(config: SimulatorConfig) -> SnapshotResult:
         link_type=config.link.link_type,
         margin_db=margin,
         ideal_margin_db=ideal_margin,
+        outage_margin_db=config.link.outage_margin_db,
         path_loss_db=path_loss,
         distance_km=distance_m / 1000.0,
         atmospheric_loss_db=total_atmosphere,
@@ -173,10 +189,27 @@ def run_continuous(
     duration_seconds: float,
     time_step_seconds: float = 0.1,
     jitter_model: str = "Rayleigh (No Bias)",
+    *,
+    tx_jitter_profile: str | None = None,
+    rx_jitter_profile: str | None = None,
 ) -> ContinuousResult:
-    """Simulate randomized pointing loss over a fixed link condition."""
+    """Simulate independent terminal jitter over a fixed link condition."""
     if duration_seconds <= 0.0 or time_step_seconds <= 0.0:
         raise ValueError("Duration and time step must be positive.")
+    if config.link.outage_margin_db < 0.0:
+        raise ValueError("Required operational margin cannot be negative.")
+
+    legacy_rician = "rician" in jitter_model.lower()
+    terminal_profiles_selected = (
+        tx_jitter_profile is not None or rx_jitter_profile is not None
+    )
+    if tx_jitter_profile is None:
+        tx_jitter_profile = CONFIGURED_RANDOM
+    if rx_jitter_profile is None:
+        rx_jitter_profile = CONFIGURED_RANDOM
+    time_step_seconds = recommended_time_step(
+        time_step_seconds, tx_jitter_profile, rx_jitter_profile
+    )
 
     transmitter, receiver = _terminals(config)
     distance_m, elevation = _distance_m(config)
@@ -187,20 +220,39 @@ def run_continuous(
     wavelength = config.link.wavelength_m
     divergence = 1.22 * wavelength / transmitter.aperture_diameter_m
     beam_radius = distance_m * divergence
-    sigma = math.hypot(transmitter.jitter_sigma_rad, receiver.jitter_sigma_rad)
-    if sigma == 0.0:
-        sigma = 1e-9
+    generator = random.Random()
+    tx_x, tx_y, tx_metadata = generate_terminal_jitter(
+        tx_jitter_profile,
+        transmitter.jitter_sigma_rad,
+        time_step_seconds,
+        count,
+        generator,
+    )
+    rx_x, rx_y, rx_metadata = generate_terminal_jitter(
+        rx_jitter_profile,
+        receiver.jitter_sigma_rad,
+        time_step_seconds,
+        count,
+        generator,
+    )
+    tx_suppression_db = config.link.tx_jitter_suppression_db
+    rx_suppression_db = config.link.rx_jitter_suppression_db
+    tx_scale = suppression_amplitude_scale(tx_suppression_db)
+    rx_scale = suppression_amplitude_scale(rx_suppression_db)
+    tx_x = [value * tx_scale for value in tx_x]
+    tx_y = [value * tx_scale for value in tx_y]
+    rx_x = [value * rx_scale for value in rx_x]
+    rx_y = [value * rx_scale for value in rx_y]
     bias = (
         config.link.boresight_bias_rad
-        if "rician" in jitter_model.lower()
+        if terminal_profiles_selected or legacy_rician
         else 0.0
     )
 
-    generator = random.Random()
     tracking_loss = []
-    for _ in elapsed:
-        x_error = bias + generator.gauss(0.0, sigma)
-        y_error = generator.gauss(0.0, sigma)
+    for index in range(count):
+        x_error = bias + tx_x[index] + rx_x[index]
+        y_error = tx_y[index] + rx_y[index]
         displacement = distance_m * math.hypot(x_error, y_error)
         raw_loss = max(math.exp(-2.0 * displacement**2 / beam_radius**2), 1e-30)
         tracking_loss.append(10.0 * math.log10(raw_loss))
@@ -285,7 +337,10 @@ def run_continuous(
         margins = [
             ideal_margin - atmosphere + jitter_loss for jitter_loss in tracking_loss
         ]
-    outage_rate = 100.0 * sum(value < 0.0 for value in margins) / len(margins)
+    outage_margin = config.link.outage_margin_db
+    outage_rate = (
+        100.0 * sum(value < outage_margin for value in margins) / len(margins)
+    )
     return ContinuousResult(
         link_type=config.link.link_type,
         elapsed_seconds=elapsed,
@@ -293,8 +348,17 @@ def run_continuous(
         time_axis_label=time_axis_label,
         margins_db=margins,
         ideal_margin_db=ideal_margin,
+        outage_margin_db=outage_margin,
         outage_rate_pct=outage_rate,
-        jitter_model=jitter_model,
+        jitter_model=(
+            f"Tx: {tx_metadata.display_name} ({tx_suppression_db:g} dB) | "
+            f"Rx: {rx_metadata.display_name} ({rx_suppression_db:g} dB)"
+        ),
+        tx_jitter_profile=tx_metadata.name,
+        rx_jitter_profile=rx_metadata.name,
+        tx_jitter_suppression_db=tx_suppression_db,
+        rx_jitter_suppression_db=rx_suppression_db,
+        time_step_seconds=time_step_seconds,
         elevation_deg=elevation,
         weather_description=weather_description,
     )
@@ -324,6 +388,7 @@ def format_snapshot(result: SnapshotResult) -> str:
         [
             "",
             f"Link margin:              {result.margin_db:.2f} dB",
+            f"Required operational:     {result.outage_margin_db:.2f} dB",
             f"Status:                   {'SUCCESS' if result.successful else 'FAILED / RISK'}",
         ]
     )

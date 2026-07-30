@@ -20,6 +20,10 @@ gs   = cfg.gs;
 satA = cfg.satA;
 satB = cfg.satB;
 link = cfg.link;
+outageMarginDB = link.OutageMarginDB;
+if outageMarginDB < 0
+    error("Required operational margin must be nonnegative.");
+end
 
 %% ---- 1. Weather Environment Data Processing ----
 if cfg.weather.UseLive
@@ -68,6 +72,12 @@ if link.Type=="inter-satellite"
     linkMargin = link.Ptx + 10*log10(tx.OpticsEfficiency) + 10*log10(rx.OpticsEfficiency) + ...
         Gtx + Grx - txPointingLoss - rxPointingLoss - pathLoss - link.Preq;
     fprintf("\nLink margin (inter-satellite): %.4f dB\n", linkMargin);
+    fprintf("Required operational margin : %.4f dB\n", outageMarginDB);
+    if linkMargin >= outageMarginDB
+        fprintf("  -> Link Status: SUCCESS (operational margin satisfied)\n\n");
+    else
+        fprintf("  -> Link Status: FAILED/RISK (below operational margin)\n\n");
+    end
 
 else % uplink / downlink atmospheric paths
     dGS = slantRangeCircularOrbit(link.ElevationAngle, satA.Height*1e3, gs.Height*1e3);
@@ -91,10 +101,11 @@ else % uplink / downlink atmospheric paths
     fprintf("  Mie scattering loss   : %.2f dB\n", mieScaLoss);
     fprintf("  --------------------------------------\n");
     fprintf("  Link margin           : %.4f dB\n", linkMargin);
-    if linkMargin > 0
-        fprintf("  -> Link Status: SUCCESS (margin > 0)\n\n");
+    fprintf("  Required operational  : %.4f dB\n", outageMarginDB);
+    if linkMargin >= outageMarginDB
+        fprintf("  -> Link Status: SUCCESS (operational margin satisfied)\n\n");
     else
-        fprintf("  -> Link Status: FAILED/RISK (margin <= 0)\n\n");
+        fprintf("  -> Link Status: FAILED/RISK (below operational margin)\n\n");
     end
 end
 end

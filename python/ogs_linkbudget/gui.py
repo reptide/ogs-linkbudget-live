@@ -7,6 +7,7 @@ from tkinter import messagebox, ttk
 
 from .charts import AnalyticsWindow
 from .config import default_config
+from .jitter import JITTER_PROFILES
 from .simulation import format_snapshot, run_continuous, run_snapshot
 
 
@@ -14,8 +15,8 @@ class OGSApplication(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("OGS Live Link Budget Control Panel — Python")
-        self.geometry("610x760")
-        self.minsize(590, 720)
+        self.geometry("650x880")
+        self.minsize(620, 830)
         self._variables()
         self._build()
         self._update_mode()
@@ -31,7 +32,8 @@ class OGSApplication(tk.Tk):
         self.altitude_m = tk.StringVar(value=str(defaults.ground.height_km * 1000))
         self.simulation_mode = tk.StringVar(value="Single Snapshot")
         self.weather_timeline = tk.StringVar(value=defaults.weather.continuous_mode)
-        self.jitter_model = tk.StringVar(value="Rayleigh (No Bias)")
+        self.tx_jitter_profile = tk.StringVar(value=JITTER_PROFILES[0])
+        self.rx_jitter_profile = tk.StringVar(value=JITTER_PROFILES[0])
         self.duration_minutes = tk.StringVar(value="1")
         self.tx_power_w = tk.StringVar(value="10")
         self.wavelength_nm = tk.StringVar(value="1550")
@@ -40,6 +42,15 @@ class OGSApplication(tk.Tk):
         self.first_jitter_urad = tk.StringVar(value="2")
         self.second_jitter_urad = tk.StringVar(value="1")
         self.boresight_urad = tk.StringVar(value="0")
+        self.outage_margin_db = tk.StringVar(
+            value=str(defaults.link.outage_margin_db)
+        )
+        self.tx_suppression_db = tk.StringVar(
+            value=str(defaults.link.tx_jitter_suppression_db)
+        )
+        self.rx_suppression_db = tk.StringVar(
+            value=str(defaults.link.rx_jitter_suppression_db)
+        )
         self.status = tk.StringVar(value="Status: Control panel ready.")
 
     def _build(self) -> None:
@@ -49,10 +60,13 @@ class OGSApplication(tk.Tk):
         notebook.grid(row=0, column=0, padx=18, pady=(18, 8), sticky="nsew")
         scenario = ttk.Frame(notebook, padding=16)
         hardware = ttk.Frame(notebook, padding=16)
+        jitter = ttk.Frame(notebook, padding=16)
         notebook.add(scenario, text="Scenario Settings")
         notebook.add(hardware, text="Hardware Configuration")
+        notebook.add(jitter, text="Jitter Models")
         scenario.columnconfigure(1, weight=1)
         hardware.columnconfigure(1, weight=1)
+        jitter.columnconfigure(0, weight=1)
 
         self._combo(
             scenario,
@@ -106,15 +120,8 @@ class OGSApplication(tk.Tk):
             self.weather_timeline,
             ("Past Replay", "Current Hold"),
         )
-        self._combo(
-            self.continuous_frame,
-            1,
-            "Jitter Model:",
-            self.jitter_model,
-            ("Rayleigh (No Bias)", "Rician (With Bias)"),
-        )
         self._entry(
-            self.continuous_frame, 2, "Duration (minutes):", self.duration_minutes
+            self.continuous_frame, 1, "Duration (minutes):", self.duration_minutes
         )
 
         self._entry(hardware, 0, "Tx Laser Power (W):", self.tx_power_w)
@@ -132,6 +139,63 @@ class OGSApplication(tk.Tk):
             row=5, column=1, padx=8, pady=9, sticky="w"
         )
         self._entry(hardware, 6, "Boresight Bias (µrad):", self.boresight_urad)
+        self._entry(
+            hardware,
+            7,
+            "Required Operational Margin (dB):",
+            self.outage_margin_db,
+        )
+
+        self.jitter_frame = ttk.LabelFrame(
+            jitter, text="Terminal Jitter Profiles & Suppression", padding=18
+        )
+        self.jitter_frame.grid(row=0, column=0, sticky="nsew")
+        self.jitter_frame.columnconfigure(1, weight=1)
+        ttk.Label(
+            self.jitter_frame,
+            text=(
+                "Select a platform or residual ATP profile independently for each "
+                "terminal. Suppression represents optional additional isolation."
+            ),
+            wraplength=520,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=2, padx=8, pady=(4, 18), sticky="w")
+        self._combo(
+            self.jitter_frame,
+            1,
+            "Tx Jitter Profile:",
+            self.tx_jitter_profile,
+            JITTER_PROFILES,
+        )
+        self._combo(
+            self.jitter_frame,
+            2,
+            "Rx Jitter Profile:",
+            self.rx_jitter_profile,
+            JITTER_PROFILES,
+        )
+        self._entry(
+            self.jitter_frame,
+            3,
+            "Additional Tx Suppression (dB):",
+            self.tx_suppression_db,
+        )
+        self._entry(
+            self.jitter_frame,
+            4,
+            "Additional Rx Suppression (dB):",
+            self.rx_suppression_db,
+        )
+        ttk.Label(
+            self.jitter_frame,
+            text=(
+                "After-ATP profiles already contain residual tracking error. "
+                "Leave suppression at 0 dB to reproduce them; a nonzero value "
+                "adds hypothetical frequency-independent suppression."
+            ),
+            wraplength=520,
+            justify="left",
+        ).grid(row=5, column=0, columnspan=2, padx=8, pady=(20, 4), sticky="w")
 
         self.run_button = ttk.Button(
             self, text="RUN LINK BUDGET", command=self._run
@@ -159,7 +223,7 @@ class OGSApplication(tk.Tk):
     ) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=0, padx=8, pady=9, sticky="e")
         combo = ttk.Combobox(
-            parent, textvariable=variable, values=values, state="readonly", width=25
+            parent, textvariable=variable, values=values, state="readonly", width=35
         )
         combo.grid(row=row, column=1, padx=8, pady=9, sticky="w")
         if callback:
@@ -167,14 +231,15 @@ class OGSApplication(tk.Tk):
 
     def _update_mode(self) -> None:
         continuous = self.simulation_mode.get() == "Continuous Tracking"
-        for child in self.continuous_frame.winfo_children():
-            try:
-                if continuous and isinstance(child, ttk.Combobox):
-                    child.configure(state="readonly")
-                else:
-                    child.configure(state="normal" if continuous else "disabled")
-            except tk.TclError:
-                pass
+        for frame in (self.continuous_frame, self.jitter_frame):
+            for child in frame.winfo_children():
+                try:
+                    if continuous and isinstance(child, ttk.Combobox):
+                        child.configure(state="readonly")
+                    else:
+                        child.configure(state="normal" if continuous else "disabled")
+                except tk.TclError:
+                    pass
 
     def _update_jitter_labels(self) -> None:
         if self.link_type.get() == "inter-satellite":
@@ -243,6 +308,15 @@ class OGSApplication(tk.Tk):
         config.link.boresight_bias_rad = self._number(
             self.boresight_urad, "Boresight bias", 0
         ) * 1e-6
+        config.link.outage_margin_db = self._number(
+            self.outage_margin_db, "Required operational margin", 0, 30
+        )
+        config.link.tx_jitter_suppression_db = self._number(
+            self.tx_suppression_db, "Tx jitter suppression", 0, 60
+        )
+        config.link.rx_jitter_suppression_db = self._number(
+            self.rx_suppression_db, "Rx jitter suppression", 0, 60
+        )
         return config
 
     def _run(self) -> None:
@@ -260,14 +334,21 @@ class OGSApplication(tk.Tk):
         self.run_button.configure(state="disabled")
         self.status.set("Status: Running simulation...")
         mode = self.simulation_mode.get()
-        jitter_model = self.jitter_model.get()
+        tx_jitter_profile = self.tx_jitter_profile.get()
+        rx_jitter_profile = self.rx_jitter_profile.get()
 
         def worker() -> None:
             try:
                 if mode == "Single Snapshot":
                     result = run_snapshot(config)
                 else:
-                    result = run_continuous(config, duration_seconds, 0.1, jitter_model)
+                    result = run_continuous(
+                        config,
+                        duration_seconds,
+                        0.1,
+                        tx_jitter_profile=tx_jitter_profile,
+                        rx_jitter_profile=rx_jitter_profile,
+                    )
                 self.after(0, lambda: self._show_result(mode, result))
             except Exception as error:
                 self.after(0, lambda captured=error: self._show_error(captured))

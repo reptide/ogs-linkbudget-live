@@ -40,13 +40,12 @@ cfg.link.Type              = "downlink"; % "downlink" | "uplink" | "inter-satell
 cfg.link.Ptx  = 17.5;   % dBm, transmitter power. GUI converts its Watts spinner to dBm before
                          % writing here, so this field is ALWAYS dBm regardless of entry point.
 cfg.link.Preq = -35.5;  % dBm, required receiver sensitivity (10 Gbps OOK, BER 1e-12 assumption)
-                         % Used as the single outage threshold by BOTH engines (dBm throughout).
+cfg.link.OutageMarginDB = 3; % dB, minimum operational reserve above receiver sensitivity
 cfg.link.AbsorptionLoss = 0.01; % dB, constant molecular absorption overhead at 1550nm (ITU-R P.1621-2)
 
-cfg.link.BoresightBias = 0; % rad, constant systematic pointing offset used only by the continuous
-                             % engine's Rician tracking model. Kept at link level (not per-terminal)
-                             % since it represents relative tx/rx misalignment, not a single terminal's
-                             % property.
+cfg.link.BoresightBias = 0; % rad, constant relative tx/rx offset in continuous simulations
+cfg.link.TxJitterSuppressionDB = 0; % dB, angular-amplitude suppression applied at the transmitter
+cfg.link.RxJitterSuppressionDB = 0; % dB, angular-amplitude suppression applied at the receiver
 
 %% ---- 5. Atmospheric Data API Gateway ----
 cfg.weather.Provider  = "open-meteo";  % Free API service, no access token keys required

@@ -45,10 +45,13 @@ The engines can also be called directly:
 cfg = ogs_config();
 
 run_link_budget_live(cfg);
-run_link_budget_continuous(cfg, 60, 0.1, "Rayleigh (No Bias)");
+run_link_budget_continuous( ...
+    cfg, 60, 0.1, ...
+    "Micius Before ATP (Open Loop)", ...
+    "Configured Random");
 ```
 
-The continuous function arguments are duration in seconds, sample interval in seconds, and jitter model. The GUI presents duration in minutes and converts it to seconds.
+The continuous arguments are duration in seconds, requested sample interval, transmitter jitter profile, and receiver jitter profile. The GUI presents duration in minutes and converts it to seconds. OLYMPUS profiles use a maximum interval of `0.005 s` (200 Hz); Micius profiles use `0.004 s` (250 Hz) to represent their published content through 100 Hz.
 
 ## Link directions
 
@@ -75,7 +78,6 @@ The Scenario Settings tab defines geometry, weather, location, and simulation be
    - **Continuous Tracking**
 6. **Continuous Simulation Sub-settings** define:
    - Live weather timeline mode
-   - Rayleigh or Rician pointing jitter
    - Duration from 1 to 60 minutes
 
 <p align="center">
@@ -113,16 +115,27 @@ The Hardware Configuration tab controls the optical terminals and pointing model
 1. **Tx Laser Power** is entered in watts and converted to dBm.
 2. **Wavelength** is entered in nanometres and converted to metres.
 3. **Tx and Rx Aperture Diameters** determine transmitter divergence and terminal gains.
-4. **Terminal Jitter** supplies one-sigma angular jitter in microradians:
+4. **Terminal Jitter** supplies the per-axis one-sigma angular jitter used when that terminal selects **Configured Random**:
    - Ground-space: satellite and ground-station jitter
    - Inter-satellite: Satellite A and Satellite B jitter
-5. **Boresight Bias** supplies the constant angular offset used by the Rician model.
+5. **Boresight Bias** supplies a constant relative angular offset for continuous simulations.
+6. **Required Operational Margin** defines the reserve above receiver sensitivity required for a successful link. It defaults to `3 dB` and can be configured from `0` to `30 dB`.
 
 <p align="center">
   <img src="images/gui_panel2.png" width="550" alt="Hardware Configuration tab">
   <br>
   <em>Figure 2: MATLAB optical hardware and pointing controls.</em>
 </p>
+
+## Jitter Models
+
+The Jitter Models tab groups the continuous pointing-disturbance controls:
+
+1. **Tx Jitter Profile** independently selects Configured Random, an OLYMPUS open-loop or after-ATP reference, or a Micius before- or after-ATP measurement for the transmitter.
+2. **Rx Jitter Profile** selects the receiver model independently.
+3. **Additional Tx and Rx Suppression** attenuate the selected profiles from `0` to `60 dB`.
+
+These controls are enabled only in Continuous Tracking mode. Configured Random uses the terminal amplitudes entered under Hardware Configuration; OLYMPUS and Micius use their model-defined motion levels. An after-ATP profile already includes tracking residual, so leave its additional suppression at `0 dB` to reproduce the reference profile alone.
 
 ## Single Snapshot
 
@@ -143,18 +156,41 @@ Inter-satellite snapshots use `cfg.link.SatDistance` and omit atmospheric loss.
 
 The continuous engine combines a static link baseline with time-varying pointing loss.
 
-### Pointing models
+### Terminal jitter profiles
 
-- **Rayleigh (No Bias):** two zero-mean Gaussian angular components produce radial pointing error.
-- **Rician (With Bias):** the x-axis component includes `cfg.link.BoresightBias`.
+- **Configured Random:** each terminal generates independent zero-mean Gaussian x/y samples using its entered per-axis jitter.
+- **OLYMPUS Platform PSD (Open Loop):** each terminal generates correlated x/y motion from the flight-derived one-sided radial spectrum `S(f) = 160/(1 + f²) µrad²/Hz`. Its power is divided equally across the axes, giving approximately `15.85 µrad` total radial RMS before suppression.
+- **OLYMPUS After ATP (Reference Design):** scales the OLYMPUS-shaped disturbance to the `0.34 µrad` residual tracking-error target published for an optical-terminal design driven by OLYMPUS-equivalent spacecraft vibration. This is a design reference, not a measured OLYMPUS closed-loop flight spectrum; the source does not provide enough frequency-resolved residual data to reconstruct that spectrum.
+- **Micius Before ATP (Open Loop):** a filter bank reproduces the published pre-suppression radial RMS values of `8.6`, `2.8`, `1.9`, and `0.6 µrad` in the `0–1`, `1–10`, `10–50`, and `50–100 Hz` bands. Their combined RMS is approximately `9.26 µrad`, consistent with the reported `9.3 µrad` full-band value.
+- **Micius After ATP (Measured):** uses the measured residual band RMS values of `0.16`, `0.26`, `0.25`, and `0.28 µrad`. Their quadrature sum is approximately `0.48 µrad`, consistent with the paper’s rounded `0.47 µrad` full-band result.
 
-Transmitter and receiver jitter combine as:
+The transmitter and receiver produce separate angular histories. Their relative error is:
 
 ```text
-sigma_total = sqrt(sigma_tx^2 + sigma_rx^2)
+x_relative(t) = boresight_bias + x_tx(t) + x_rx(t)
+y_relative(t) = y_tx(t) + y_rx(t)
 ```
 
-The radial angular error is converted to displacement at the receiver and applied to a diffraction-limited Gaussian beam.
+This permits combinations such as an OLYMPUS transmitter with a configured-random receiver. The radial angular error is converted to displacement at the receiver and applied to a diffraction-limited Gaussian beam.
+
+### ATP residual profiles and manual suppression
+
+An ATP profile represents the angular error remaining after an acquisition, tracking, and pointing control system has responded. Real ATP rejection depends on disturbance frequency, control bandwidth, sensors, steering hardware, delay, and measurement noise. The measured Micius before/after bands therefore show different rejection in different parts of the spectrum.
+
+The manual suppression fields are a simpler engineering control. They apply one constant amplitude factor to every frequency in the selected history:
+
+```text
+suppressed_angle = open_loop_angle * 10^(-suppression_dB/20)
+suppressed_PSD   = open_loop_PSD   * 10^(-suppression_dB/10)
+```
+
+`0 dB` preserves the complete selected profile, `10 dB` produces `0.316×` angular RMS, `20 dB` produces `0.1×`, and `40 dB` produces `0.01×`. With an open-loop profile, this approximates a hypothetical uniform suppression system. With an after-ATP profile, a nonzero value represents hypothetical **additional** isolation or control after the published residual and compounds with it.
+
+In this simplified model, the OLYMPUS reference residual is equivalent to applying approximately `33.4 dB` of uniform amplitude suppression to the modeled open-loop OLYMPUS history because only an integrated residual target is available. The Micius after-ATP option is different: it uses measured residuals in four frequency bands, so it changes the spectral distribution and cannot be reproduced exactly by one manual suppression value.
+
+OLYMPUS supplies a conservative GEO platform reference, while Micius supplies LEO lasercom measurements before and after its ATP system. This comparison includes differences in spacecraft design and measurement conditions, so it is not a controlled GEO-versus-LEO experiment.
+
+Sources: [JPL OLYMPUS flight transceiver reference](https://descanso.jpl.nasa.gov/monograph/series7/Descanso%207_chap05.pdf), [NASA/JPL optical-terminal reference design](https://ntrs.nasa.gov/citations/20060029570), [published OLYMPUS analytic parameters](https://xuebao.sjtu.edu.cn/article/2024/1006-2467/1006-2467-58-4-449.shtml), and the [Micius in-orbit angular micro-vibration measurements](https://opg.optica.org/ao/abstract.cfm?uri=ao-60-7-1881).
 
 ### Random sampling
 
@@ -178,7 +214,7 @@ Tx power
 - atmospheric loss
 ```
 
-Link margin is received power minus `cfg.link.Preq`. A margin below `0 dB` is counted as an outage.
+Link margin is received power minus `cfg.link.Preq`. The `0 dB` level is therefore the receiver-sensitivity boundary. A sample is counted as an operational outage when its margin falls below `cfg.link.OutageMarginDB`, which defaults to `3 dB`.
 
 ### Atmospheric attenuation
 
@@ -205,10 +241,11 @@ The analytics figure contains three views:
 
 ### Dynamic Margin Profile
 
-The top plot shows link margin over the selected timeline. The red dashed line marks the `0 dB` outage threshold.
+The top plot shows link margin over the selected timeline. The red dashed line marks the user-configured operational outage threshold, which defaults to `3 dB`. A gray dotted line retains the underlying `0 dB` receiver-sensitivity boundary.
 
-- Above `0 dB`: received power exceeds the required sensitivity.
-- Below `0 dB`: the sample is in outage.
+- At or above the operational threshold: the configured reserve is satisfied.
+- Between `0 dB` and the operational threshold: the receiver sensitivity is met, but the desired reserve is not.
+- Below `0 dB`: received power is below the assumed receiver sensitivity.
 
 The green dash-dot reference line shows the margin for the same geometry and hardware with atmospheric and jitter losses removed. For inter-satellite links, which do not use atmospheric loss, the reference removes jitter loss only. The gap between the reference and the simulated profile shows the combined margin reduction from those disturbances.
 
@@ -220,7 +257,7 @@ The lower-left histogram shows the distribution of margin samples. A wider distr
 
 ### Outage Rate
 
-The lower-right chart reports the percentage of timeline samples with margin below `0 dB`.
+The lower-right chart reports the percentage of timeline samples below the configured operational margin.
 
 ## Configuration structure
 
@@ -232,7 +269,7 @@ The lower-right chart reports the percentage of timeline samples with margin bel
 | `cfg.satA` | Primary satellite altitude, optics, pointing error, and jitter |
 | `cfg.satB` | Inter-satellite receiver optics, pointing error, and jitter |
 | `cfg.orbit` | Worst-case elevation and reserved TLE fields |
-| `cfg.link` | Direction, wavelength, power, sensitivity, distance, absorption, and bias |
+| `cfg.link` | Direction, wavelength, power, sensitivity, operational margin, distance, absorption, and bias |
 | `cfg.weather` | Live/manual selection, continuous timeline mode, and manual weather |
 
 Important unit conventions:
@@ -245,6 +282,7 @@ Important unit conventions:
 | `cfg.link.Wavelength` | m |
 | `cfg.link.Ptx` | dBm |
 | `cfg.link.Preq` | dBm |
+| `cfg.link.OutageMarginDB` | dB |
 | Pointing error, jitter, and bias fields | rad |
 
 ## Source files
@@ -254,7 +292,8 @@ Important unit conventions:
 | `ogs_gui.m` | Builds the GUI, maps controls to configuration, and launches simulations |
 | `ogs_config.m` | Defines default ground station, satellites, link, orbit, and weather settings |
 | `run_link_budget_live.m` | Computes and prints a single link-budget snapshot |
-| `run_link_budget_continuous.m` | Generates randomized pointing-error timelines, margin plots, and outage statistics |
+| `run_link_budget_continuous.m` | Combines independent terminal jitter histories with margin and outage calculations |
+| `generate_terminal_jitter.m` | Generates configured-random, OLYMPUS, or Micius two-axis terminal motion, including reference after-ATP residuals |
 | `fetch_live_weather.m` | Retrieves the latest Open-Meteo conditions |
 | `fetch_weather_history.m` | Retrieves the recent 15-minute weather window |
 | `classify_attenuation.m` | Maps WMO weather codes to clear, rain, or snow attenuation |
@@ -272,4 +311,5 @@ Important unit conventions:
 - Open-Meteo supplies model data rather than direct measurements from a dedicated station at the entered coordinates.
 - Historical weather replay uses 15-minute samples and interpolates atmospheric loss across the signal timeline.
 - Current Hold assumes weather remains unchanged for the selected future duration.
-- The continuous engine models pointing jitter statistically; it does not model satellite attitude-control dynamics or temporal jitter correlation.
+- Configured Random has no temporal correlation; OLYMPUS uses its analytic PSD and reference residual target, while Micius uses band-shaped approximations of its published before- and after-ATP measurements.
+- The simulator does not model a pointing-control transfer function, reaction-wheel operating states, or other satellite attitude-control dynamics.
