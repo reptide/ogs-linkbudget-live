@@ -3,7 +3,7 @@
 from .config import SimulatorConfig, default_config
 from .simulation import ContinuousResult, SnapshotResult, run_continuous, run_snapshot
 
-__version__ = "2.2.0"
+__version__ = "3.1.0"
 
 __all__ = [
     "ContinuousResult",
