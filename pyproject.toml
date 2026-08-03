@@ -24,6 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering",
 ]
+license = "MIT"
 
 [project.urls]
 Homepage = "https://github.com/reptide/ogs-linkbudget-live"
