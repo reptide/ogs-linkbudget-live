@@ -43,11 +43,18 @@ visibility = w.VisibilityKm;               % Empirical visibility value in km
 link.AttenuationType = w.AttenuationType;   % Auto-resolved attenuation category ("clear"|"rain"|"snow")
 
 %% ---- 2. Orbital Path Geometry ----
-% Ground-space links are evaluated at the configured worst-case elevation.
-if isfield(cfg.orbit, 'UseTLE') && cfg.orbit.UseTLE
-    error("TLE-based elevation tracking is not implemented yet. Set cfg.orbit.UseTLE = false.");
+if link.Type ~= "inter-satellite"
+    geometry = resolve_trajectory(cfg, 0, datetime('now', 'TimeZone', 'UTC'));
+    link.ElevationAngle = geometry.ElevationDeg(1);
+    if ~geometry.Visible(1)
+        fprintf("\n===== LINK BUDGET SNAPSHOT RESULTS (%s) =====\n", upper(link.Type));
+        fprintf("  Trajectory mode       : %s\n", geometry.Source);
+        fprintf("  Elevation             : %.2f deg\n", link.ElevationAngle);
+        fprintf("  Minimum elevation     : %.2f deg\n", cfg.orbit.MinElevationAngle);
+        fprintf("  -> Link Status: NO ACCESS (satellite below elevation mask)\n\n");
+        return;
+    end
 end
-link.ElevationAngle = cfg.orbit.WorstCaseElevationAngle;
 
 %% ---- 3. Establish System Terminal Roles ----
 if link.Type=="downlink"
@@ -80,7 +87,7 @@ if link.Type=="inter-satellite"
     end
 
 else % uplink / downlink atmospheric paths
-    dGS = slantRangeCircularOrbit(link.ElevationAngle, satA.Height*1e3, gs.Height*1e3);
+    dGS = geometry.RangeM(1);
     pathLoss = fspl(dGS, link.Wavelength);
 
     [atmLossDB, geoScaLoss, mieScaLoss] = compute_atmospheric_loss( ...
@@ -91,8 +98,12 @@ else % uplink / downlink atmospheric paths
         Gtx + Grx - txPointingLoss - rxPointingLoss - pathLoss - atmLossDB - link.Preq;
 
     fprintf("\n===== LINK BUDGET SNAPSHOT RESULTS (%s) =====\n", upper(link.Type));
+    fprintf("  Trajectory mode       : %s\n", geometry.Source);
     fprintf("  Ground station coords : %.4f N, %.4f E\n", gs.Latitude, gs.Longitude);
-    fprintf("  Worst-case elevation  : %.1f deg\n", link.ElevationAngle);
+    fprintf("  Elevation             : %.2f deg\n", link.ElevationAngle);
+    if isfinite(geometry.AzimuthDeg(1))
+        fprintf("  Azimuth               : %.2f deg\n", geometry.AzimuthDeg(1));
+    end
     fprintf("  Slant range           : %.1f km\n", dGS/1e3);
     fprintf("  Visibility (Measured) : %.2f km\n", visibility);
     fprintf("  Attenuation type      : %s\n", link.AttenuationType);

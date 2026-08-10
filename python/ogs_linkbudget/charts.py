@@ -130,20 +130,32 @@ class AnalyticsWindow(tk.Toplevel):
 
     def _draw_margin(self, rect: tuple[float, float, float, float]) -> None:
         margins = self.result.margins_db
-        ideal = self.result.ideal_margin_db
+        ideal_margins = self.result.ideal_margins_db
         outage_margin = self.result.outage_margin_db
+        visible_values = [
+            value
+            for value, access in zip(margins, self.result.visible_mask)
+            if access and math.isfinite(value)
+        ]
+        visible_references = [
+            value
+            for value, access in zip(ideal_margins, self.result.visible_mask)
+            if access and math.isfinite(value)
+        ]
+        scale_values = visible_values + visible_references + [0.0, outage_margin]
         y_min = max(
-            -100.0, min(min(margins), 0.0, outage_margin, ideal) - 10.0
+            -100.0, min(scale_values) - 10.0
         )
         y_max = max(
-            20.0, max(max(margins), 0.0, outage_margin, ideal) + 10.0
+            20.0, max(scale_values) + 10.0
         )
         y_values = self._ticks(y_min, y_max)
         y_ticks = [(value, f"{value:.0f}") for value in y_values]
         x_end = self.result.elapsed_seconds[-1]
-        title = f"Dynamic Margin Profile — {self.result.jitter_model}"
-        if self.result.elevation_deg is not None:
-            title += f" — Worst-case Elevation {self.result.elevation_deg:.1f}°"
+        title = (
+            f"Dynamic Margin Profile — {self.result.trajectory_description} — "
+            f"{self.result.jitter_model}"
+        )
         plot = self._axes(
             rect,
             title,
@@ -184,10 +196,6 @@ class AnalyticsWindow(tk.Toplevel):
             anchor="e",
         )
 
-        reference_y = y_pixel(ideal)
-        self.canvas.create_line(
-            left, reference_y, right, reference_y, fill="#008030", dash=(8, 4, 2, 4), width=2
-        )
         reference_name = (
             "No Jitter Loss"
             if self.result.link_type == "inter-satellite"
@@ -195,22 +203,37 @@ class AnalyticsWindow(tk.Toplevel):
         )
         self.canvas.create_text(
             left + 4,
-            reference_y + 10,
-            text=f"Reference: {reference_name} ({ideal:.1f} dB)",
+            top + 12,
+            text=f"Reference: {reference_name}",
             fill="#008030",
             anchor="w",
         )
 
         max_points = max(500, int(right - left) * 2)
         step = max(1, math.ceil(len(margins) / max_points))
-        points: list[float] = []
-        for index in range(0, len(margins), step):
-            x = self._map(
-                self.result.elapsed_seconds[index], 0.0, x_end, left, right
-            )
-            points.extend((x, y_pixel(margins[index])))
-        if len(points) >= 4:
-            self.canvas.create_line(*points, fill="#0066dd", width=1)
+        sampled_indices = list(range(0, len(margins), step))
+        if sampled_indices[-1] != len(margins) - 1:
+            sampled_indices.append(len(margins) - 1)
+
+        def draw_visible_segments(values: list[float], color: str, **options) -> None:
+            points: list[float] = []
+            for index in sampled_indices:
+                if not self.result.visible_mask[index]:
+                    if len(points) >= 4:
+                        self.canvas.create_line(*points, fill=color, **options)
+                    points = []
+                    continue
+                x = self._map(
+                    self.result.elapsed_seconds[index], 0.0, x_end, left, right
+                )
+                points.extend((x, y_pixel(values[index])))
+            if len(points) >= 4:
+                self.canvas.create_line(*points, fill=color, **options)
+
+        draw_visible_segments(margins, "#0066dd", width=1)
+        draw_visible_segments(
+            ideal_margins, "#008030", width=2, dash=(8, 4, 2, 4)
+        )
 
     @staticmethod
     def _histogram(values: list[float], bin_count: int = 45) -> tuple[list[float], list[float]]:
@@ -229,13 +252,29 @@ class AnalyticsWindow(tk.Toplevel):
         return edges, density
 
     def _draw_pdf(self, rect: tuple[float, float, float, float]) -> None:
-        edges, density = self._histogram(self.result.margins_db)
+        visible_margins = [
+            value
+            for value, access in zip(
+                self.result.margins_db, self.result.visible_mask
+            )
+            if access and math.isfinite(value)
+        ]
+        if not visible_margins:
+            left, top, right, bottom = rect
+            self.canvas.create_text(
+                (left + right) / 2,
+                (top + bottom) / 2,
+                text="No samples above the elevation mask",
+                font=("TkDefaultFont", 12, "bold"),
+            )
+            return
+        edges, density = self._histogram(visible_margins)
         y_max = max(density) * 1.12 if max(density) else 1.0
         x_ticks_values = self._ticks(edges[0], edges[-1], 4)
         y_ticks_values = self._ticks(0.0, y_max, 4)
         plot = self._axes(
             rect,
-            "Margin Probability Density Function (PDF)",
+            "Visible-Link Margin PDF",
             "Margin (dB)",
             "PDF",
             [(value, f"{value:.1f}") for value in x_ticks_values],
@@ -253,35 +292,40 @@ class AnalyticsWindow(tk.Toplevel):
             )
 
     def _draw_outage(self, rect: tuple[float, float, float, float]) -> None:
+        visible_rate = self.result.visible_link_outage_rate_pct
+        visible_text = "N/A" if math.isnan(visible_rate) else f"{visible_rate:.1f}%"
         plot = self._axes(
             rect,
             (
-                "Calculated Link Outage Rate "
-                f"(< {self.result.outage_margin_db:g} dB)"
+                f"Availability (< {self.result.outage_margin_db:g} dB; "
+                f"Visible-link outage {visible_text})"
             ),
-            "Time in Outage (%)",
-            "Outage (%)",
-            [(0.5, "")],
+            "",
+            "Time (%)",
+            [(0.5, "Service Outage"), (1.5, "No Access")],
             [(value, f"{value:.0f}") for value in range(0, 101, 20)],
-            (0.0, 1.0),
+            (0.0, 2.0),
             (0.0, 100.0),
         )
         left, top, right, bottom = plot
-        center = (left + right) / 2
-        bar_width = (right - left) * 0.24
-        value = self.result.outage_rate_pct
-        y = self._map(value, 0.0, 100.0, bottom, top)
-        self.canvas.create_rectangle(
-            center - bar_width / 2,
-            y,
-            center + bar_width / 2,
-            bottom,
-            fill="#dc5815",
-            outline="#7a2e08",
-        )
-        self.canvas.create_text(
-            center,
-            max(top + 14, y - 12),
-            text=f"{value:.1f}%",
-            font=("TkDefaultFont", 12, "bold"),
-        )
+        bar_width = (right - left) * 0.18
+        for position, value in (
+            (0.5, self.result.outage_rate_pct),
+            (1.5, self.result.no_access_rate_pct),
+        ):
+            center = self._map(position, 0.0, 2.0, left, right)
+            y = self._map(value, 0.0, 100.0, bottom, top)
+            self.canvas.create_rectangle(
+                center - bar_width / 2,
+                y,
+                center + bar_width / 2,
+                bottom,
+                fill="#dc5815",
+                outline="#7a2e08",
+            )
+            self.canvas.create_text(
+                center,
+                max(top + 14, y - 12),
+                text=f"{value:.1f}%",
+                font=("TkDefaultFont", 12, "bold"),
+            )

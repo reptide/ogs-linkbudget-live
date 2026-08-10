@@ -33,6 +33,29 @@ class SimulationTests(unittest.TestCase):
                 self.assertEqual(result.link_type, link_type)
                 self.assertGreater(result.distance_km, 0.0)
 
+    def test_moving_trajectory_updates_continuous_geometry(self) -> None:
+        self.config.orbit.mode = "keplerian"
+        self.config.orbit.minimum_elevation_deg = 0.0
+        self.config.ground.latitude_deg = 0.0
+        self.config.ground.longitude_deg = 30.0
+        result = run_continuous(self.config, 60.0, 1.0)
+        self.assertGreater(max(result.ranges_km) - min(result.ranges_km), 0.1)
+        self.assertGreater(
+            max(result.ideal_margins_db) - min(result.ideal_margins_db), 0.001
+        )
+        self.assertEqual(len(result.visible_mask), len(result.elapsed_seconds))
+
+    def test_no_access_is_counted_as_service_outage(self) -> None:
+        self.config.orbit.mode = "keplerian"
+        self.config.orbit.minimum_elevation_deg = 90.0
+        result = run_continuous(self.config, 1.0, 0.1)
+        self.assertEqual(result.no_access_rate_pct, 100.0)
+        self.assertEqual(result.outage_rate_pct, 100.0)
+
+        snapshot = run_snapshot(self.config)
+        self.assertFalse(snapshot.has_access)
+        self.assertFalse(snapshot.successful)
+
     def test_operational_margin_defaults_to_three_db(self) -> None:
         snapshot = run_snapshot(self.config)
         continuous = run_continuous(self.config, 1.0, 0.1)

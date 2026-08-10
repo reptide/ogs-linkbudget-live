@@ -8,8 +8,8 @@ The repository contains two parallel implementations:
 
 | Application | Requirements | Start command |
 |---|---|---|
-| MATLAB | MATLAB with `uifigure` and Satellite Communications Toolbox | `ogs_gui` |
-| Python | Python 3.10+ with Tkinter; no third-party packages | `python3 python/run.py` |
+| MATLAB | MATLAB with `uifigure` and Satellite Communications Toolbox; fixed or propagated trajectories | `ogs_gui` |
+| Python | Python 3.10+ with Tkinter; no third-party packages; fixed or propagated trajectories | `python3 python/run.py` |
 
 Open-Meteo supplies live and historical weather data to both applications and does not require an API key. Internet access is only required when **Live API** weather is selected.
 
@@ -57,8 +57,8 @@ The continuous arguments are duration in seconds, requested sample interval, tra
 
 | Direction | Transmitter | Receiver | Distance and propagation |
 |---|---|---|---|
-| Downlink | Satellite A | Ground station | LEO slant range plus atmospheric loss |
-| Uplink | Ground station | Satellite A | LEO slant range plus atmospheric loss |
+| Downlink | Satellite A | Ground station | Fixed or propagated slant range plus atmospheric loss |
+| Uplink | Ground station | Satellite A | Fixed or propagated slant range plus atmospheric loss |
 | Inter-satellite | Satellite A | Satellite B | Configured satellite distance with no atmospheric loss |
 
 The GUI’s Tx and Rx aperture controls follow these transmitter and receiver roles. For inter-satellite simulations, the two jitter controls represent Satellite A and Satellite B.
@@ -68,7 +68,7 @@ The GUI’s Tx and Rx aperture controls follow these transmitter and receiver ro
 The Scenario Settings tab defines geometry, weather, location, and simulation behavior.
 
 1. **Link Direction** selects downlink, uplink, or inter-satellite operation.
-2. **Worst-case Elevation** is the single conservative elevation used for ground-space calculations. Snapshot and continuous modes evaluate the link at this angle. Inter-satellite links do not use elevation.
+2. **Worst-case Elevation** is the conservative ground-space angle used by Fixed Worst-case Geometry. Propagated trajectories calculate elevation from the satellite state and ground-station position. Inter-satellite links do not use elevation.
 3. **Atmosphere Data** selects:
    - **Live API**, which uses Open-Meteo data for the entered ground-station coordinates.
    - **Manual**, which uses `cfg.weather.Manual.VisibilityKm` and `cfg.weather.Manual.AttenuationType`.
@@ -86,6 +86,20 @@ The Scenario Settings tab defines geometry, weather, location, and simulation be
   <em>Figure 1: MATLAB scenario and continuous-simulation controls.</em>
 </p>
 
+## Trajectory
+
+The MATLAB and Python Trajectory tabs select how Satellite A moves for ground-space links:
+
+1. **Fixed Worst-case Geometry** preserves the simple design case. Satellite altitude and the Scenario tab's worst-case elevation determine one constant slant range.
+2. **Keplerian Elements** accepts semi-major axis, eccentricity, inclination, right ascension of the ascending node (RAAN), argument of periapsis, and true anomaly at the simulation start.
+3. **Initial State Vector** accepts the satellite's Earth-centered inertial (ECI) position in kilometres and velocity in kilometres per second at the simulation start. The origin is Earth's center of mass, not the ground station. The six inputs are `[X, Y, Z]` and `[Vx, Vy, Vz]` on inertial axes.
+
+The two moving modes use an unperturbed two-body Earth model. Keplerian elements are propagated analytically, while the ECI state vector is integrated with fourth-order Runge-Kutta steps no longer than one second. The inertial position is rotated into the Earth-fixed frame for the run epoch and converted to azimuth, elevation, and slant range relative to the configured ground station.
+
+For example, `[7000, 0, 0] km` with approximately `[0, 7.546, 0] km/s` describes a near-circular equatorial orbit. It does not describe a satellite located 7,000 km from the ground station.
+
+**Minimum Elevation** is the ground-station access mask. Samples below it are unavailable rather than low-margin link samples. Continuous simulations sample trajectory geometry at `cfg.orbit.GeometrySampleTime`, which defaults to one second, and interpolate it onto the higher-rate pointing-jitter timeline.
+
 ## Live weather timeline modes
 
 The weather timeline selection applies to continuous ground-space simulations using Live API weather.
@@ -98,7 +112,7 @@ Past Replay retrieves the weather window ending at the latest available Open-Met
 -60 min  -45 min  -30 min  -15 min  latest
 ```
 
-Atmospheric loss is calculated at every weather sample and linearly interpolated onto the continuous signal timeline. The graph uses historical UTC timestamps.
+Weather is interpolated onto the trajectory timeline. Atmospheric loss is then recalculated at each trajectory sample using the satellite's current elevation and interpolated onto the continuous signal timeline. The graph uses historical UTC timestamps.
 
 ### Current Hold
 
@@ -144,17 +158,17 @@ The snapshot engine evaluates one deterministic link condition.
 For ground-space links it:
 
 1. Resolves current or manual weather.
-2. Calculates slant range at the worst-case elevation.
+2. Resolves fixed or propagated trajectory geometry at the current epoch.
 3. Selects transmitter and receiver roles.
 4. Calculates telescope gains and static pointing losses.
 5. Calculates free-space and atmospheric losses.
-6. Prints the resulting margin and success status in the MATLAB Command Window.
+6. Prints the resulting margin and success status in the MATLAB Command Window. A propagated satellite below the elevation mask reports **NO ACCESS**.
 
 Inter-satellite snapshots use `cfg.link.SatDistance` and omit atmospheric loss.
 
 ## Continuous Tracking
 
-The continuous engine combines a static link baseline with time-varying pointing loss.
+The continuous engine combines time-varying geometry, atmospheric attenuation, and pointing loss. Fixed mode retains a constant geometry baseline; moving modes update range and elevation throughout the run.
 
 ### Terminal jitter profiles
 
@@ -247,17 +261,17 @@ The top plot shows link margin over the selected timeline. The red dashed line m
 - Between `0 dB` and the operational threshold: the receiver sensitivity is met, but the desired reserve is not.
 - Below `0 dB`: received power is below the assumed receiver sensitivity.
 
-The green dash-dot reference line shows the margin for the same geometry and hardware with atmospheric and jitter losses removed. For inter-satellite links, which do not use atmospheric loss, the reference removes jitter loss only. The gap between the reference and the simulated profile shows the combined margin reduction from those disturbances.
+The green dash-dot reference curve shows the margin for the same time-varying geometry and hardware with atmospheric and jitter losses removed. For inter-satellite links, which do not use atmospheric loss, the reference removes jitter loss only. The gap between the reference and the simulated profile shows the combined margin reduction from those disturbances. Ground-space plots contain gaps while a propagated satellite is below the elevation mask.
 
 For Past Replay and Current Hold, the horizontal axis contains UTC timestamps. Manual-weather and inter-satellite runs use elapsed seconds.
 
 ### Margin Probability Density
 
-The lower-left histogram shows the distribution of margin samples. A wider distribution indicates greater pointing-loss variation. Boresight bias generally shifts the distribution toward lower margins.
+The lower-left histogram shows the distribution of margin samples while the satellite is above the elevation mask. A wider distribution indicates greater pointing-loss variation. Boresight bias generally shifts the distribution toward lower margins.
 
 ### Outage Rate
 
-The lower-right chart reports the percentage of timeline samples below the configured operational margin.
+The lower-right chart separates **Service Outage**, which includes unavailable geometry and visible samples below the operational margin, from **No Access**, which is caused only by the elevation mask. Its title also reports the conditional outage percentage among visible samples.
 
 ## Configuration structure
 
@@ -268,7 +282,7 @@ The lower-right chart reports the percentage of timeline samples below the confi
 | `cfg.gs` | Ground-station coordinates, altitude, optics, pointing error, and jitter |
 | `cfg.satA` | Primary satellite altitude, optics, pointing error, and jitter |
 | `cfg.satB` | Inter-satellite receiver optics, pointing error, and jitter |
-| `cfg.orbit` | Worst-case elevation and reserved TLE fields |
+| `cfg.orbit` | Trajectory mode, fixed geometry, elevation mask, Keplerian elements, and initial ECI state vector |
 | `cfg.link` | Direction, wavelength, power, sensitivity, operational margin, distance, absorption, and bias |
 | `cfg.weather` | Live/manual selection, continuous timeline mode, and manual weather |
 
@@ -278,6 +292,9 @@ Important unit conventions:
 |---|---|
 | `cfg.gs.Height` | km |
 | `cfg.satA.Height` | km |
+| `cfg.orbit.Keplerian.SemiMajorAxisKm` | km |
+| `cfg.orbit.StateVector.PositionECIKm` | km, ECI |
+| `cfg.orbit.StateVector.VelocityECIKmS` | km/s, ECI |
 | `cfg.link.SatDistance` | km |
 | `cfg.link.Wavelength` | m |
 | `cfg.link.Ptx` | dBm |
@@ -292,7 +309,9 @@ Important unit conventions:
 | `ogs_gui.m` | Builds the GUI, maps controls to configuration, and launches simulations |
 | `ogs_config.m` | Defines default ground station, satellites, link, orbit, and weather settings |
 | `run_link_budget_live.m` | Computes and prints a single link-budget snapshot |
-| `run_link_budget_continuous.m` | Combines independent terminal jitter histories with margin and outage calculations |
+| `run_link_budget_continuous.m` | Combines trajectory, atmosphere, independent terminal jitter histories, access, margin, and outage calculations |
+| `resolve_trajectory.m` | Propagates fixed, Keplerian, or initial-state-vector geometry and calculates ground-relative access |
+| `tests/test_resolve_trajectory.m` | Verifies fixed geometry, Keplerian propagation, state-vector propagation, and invalid-orbit rejection |
 | `generate_terminal_jitter.m` | Generates configured-random, OLYMPUS, or Micius two-axis terminal motion, including reference after-ATP residuals |
 | `fetch_live_weather.m` | Retrieves the latest Open-Meteo conditions |
 | `fetch_weather_history.m` | Retrieves the recent 15-minute weather window |
@@ -300,13 +319,15 @@ Important unit conventions:
 | `compute_atmospheric_loss.m` | Calculates shared geometrical, Mie, and absorption losses |
 | `python/run.py` | Launches the Python desktop application |
 | `python/ogs_linkbudget/` | Contains the Python configuration, physics, weather, simulation, GUI, and chart modules |
+| `python/ogs_linkbudget/trajectory.py` | Implements fixed, Keplerian, and initial-state-vector trajectory geometry in Python |
 | `python/tests/` | Verifies the Python geometry and simulation behavior without network access |
 
 ## Model scope
 
-- Ground-space geometry uses one user-selected worst-case elevation for the complete calculation.
-- TLE-based time-varying elevation is not implemented.
-- Satellite A uses a configured circular-orbit altitude.
+- Both applications support fixed worst-case geometry, Keplerian elements, and an initial ECI state vector for ground-space links.
+- Keplerian and state-vector propagation uses a two-body Earth model. It omits drag, oblateness, third-body forces, maneuvers, attitude, and orbit-estimation uncertainty.
+- The moving modes treat their elements or state vector as valid at the simulation start; catalog lookup and TLE/OMM import are intentionally outside this simple tester.
+- Atmospheric weather remains tied to the configured ground station. The model changes air mass with elevation but does not resolve spatially varying weather along the slanted beam path.
 - Inter-satellite range is a fixed configured distance.
 - Open-Meteo supplies model data rather than direct measurements from a dedicated station at the entered coordinates.
 - Historical weather replay uses 15-minute samples and interpolates atmospheric loss across the signal timeline.

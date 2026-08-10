@@ -15,11 +15,12 @@ class OGSApplication(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("OGS Live Link Budget Control Panel — Python")
-        self.geometry("650x880")
-        self.minsize(620, 830)
+        self.geometry("700x920")
+        self.minsize(660, 860)
         self._variables()
         self._build()
         self._update_mode()
+        self._update_trajectory_mode()
         self._update_jitter_labels()
 
     def _variables(self) -> None:
@@ -35,6 +36,36 @@ class OGSApplication(tk.Tk):
         self.tx_jitter_profile = tk.StringVar(value=JITTER_PROFILES[0])
         self.rx_jitter_profile = tk.StringVar(value=JITTER_PROFILES[0])
         self.duration_minutes = tk.StringVar(value="1")
+        self.trajectory_mode = tk.StringVar(value="Fixed Worst-case Geometry")
+        self.minimum_elevation = tk.StringVar(
+            value=str(defaults.orbit.minimum_elevation_deg)
+        )
+        self.satellite_height_km = tk.StringVar(
+            value=str(defaults.satellite_a.height_km)
+        )
+        self.semi_major_axis_km = tk.StringVar(
+            value=str(defaults.orbit.keplerian.semi_major_axis_km)
+        )
+        self.eccentricity = tk.StringVar(
+            value=str(defaults.orbit.keplerian.eccentricity)
+        )
+        self.inclination_deg = tk.StringVar(
+            value=str(defaults.orbit.keplerian.inclination_deg)
+        )
+        self.raan_deg = tk.StringVar(value=str(defaults.orbit.keplerian.raan_deg))
+        self.argument_periapsis_deg = tk.StringVar(
+            value=str(defaults.orbit.keplerian.argument_of_periapsis_deg)
+        )
+        self.true_anomaly_deg = tk.StringVar(
+            value=str(defaults.orbit.keplerian.true_anomaly_deg)
+        )
+        initial_state = (
+            defaults.orbit.state_vector.position_eci_km
+            + defaults.orbit.state_vector.velocity_eci_km_s
+        )
+        self.state_vector_values = [
+            tk.StringVar(value=str(value)) for value in initial_state
+        ]
         self.tx_power_w = tk.StringVar(value="10")
         self.wavelength_nm = tk.StringVar(value="1550")
         self.tx_aperture_m = tk.StringVar(value="0.3")
@@ -60,12 +91,15 @@ class OGSApplication(tk.Tk):
         notebook.grid(row=0, column=0, padx=18, pady=(18, 8), sticky="nsew")
         scenario = ttk.Frame(notebook, padding=16)
         hardware = ttk.Frame(notebook, padding=16)
+        trajectory = ttk.Frame(notebook, padding=16)
         jitter = ttk.Frame(notebook, padding=16)
         notebook.add(scenario, text="Scenario Settings")
         notebook.add(hardware, text="Hardware Configuration")
+        notebook.add(trajectory, text="Trajectory")
         notebook.add(jitter, text="Jitter Models")
         scenario.columnconfigure(1, weight=1)
         hardware.columnconfigure(1, weight=1)
+        trajectory.columnconfigure(1, weight=1)
         jitter.columnconfigure(0, weight=1)
 
         self._combo(
@@ -145,6 +179,94 @@ class OGSApplication(tk.Tk):
             "Required Operational Margin (dB):",
             self.outage_margin_db,
         )
+
+        self._combo(
+            trajectory,
+            0,
+            "Trajectory Mode:",
+            self.trajectory_mode,
+            (
+                "Fixed Worst-case Geometry",
+                "Keplerian Elements",
+                "Initial ECI State Vector (Earth-centered)",
+            ),
+            self._update_trajectory_mode,
+        )
+        self._entry(
+            trajectory,
+            1,
+            "Minimum Elevation (deg):",
+            self.minimum_elevation,
+        )
+
+        self.fixed_trajectory_frame = ttk.LabelFrame(
+            trajectory, text="Fixed Geometry", padding=16
+        )
+        self.fixed_trajectory_frame.grid(
+            row=2, column=0, columnspan=2, padx=4, pady=(16, 4), sticky="nsew"
+        )
+        self.fixed_trajectory_frame.columnconfigure(1, weight=1)
+        self._entry(
+            self.fixed_trajectory_frame,
+            0,
+            "Satellite Altitude (km):",
+            self.satellite_height_km,
+        )
+        ttk.Label(
+            self.fixed_trajectory_frame,
+            text="Uses the worst-case elevation entered under Scenario Settings.",
+            wraplength=500,
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, padx=8, pady=(8, 2), sticky="w")
+
+        self.keplerian_frame = ttk.LabelFrame(
+            trajectory, text="Keplerian Elements at Simulation Start", padding=16
+        )
+        self.keplerian_frame.grid(
+            row=2, column=0, columnspan=2, padx=4, pady=(16, 4), sticky="nsew"
+        )
+        self.keplerian_frame.columnconfigure(1, weight=1)
+        keplerian_fields = (
+            ("Semi-major Axis (km):", self.semi_major_axis_km),
+            ("Eccentricity:", self.eccentricity),
+            ("Inclination (deg):", self.inclination_deg),
+            ("RAAN (deg):", self.raan_deg),
+            ("Argument of Periapsis (deg):", self.argument_periapsis_deg),
+            ("True Anomaly (deg):", self.true_anomaly_deg),
+        )
+        for row, (label, variable) in enumerate(keplerian_fields):
+            self._entry(self.keplerian_frame, row, label, variable)
+
+        self.state_vector_frame = ttk.LabelFrame(
+            trajectory,
+            text="Earth-Centered Inertial State at Simulation Start",
+            padding=16,
+        )
+        self.state_vector_frame.grid(
+            row=2, column=0, columnspan=2, padx=4, pady=(16, 4), sticky="nsew"
+        )
+        self.state_vector_frame.columnconfigure(1, weight=1)
+        ttk.Label(
+            self.state_vector_frame,
+            text=(
+                "Origin: Earth's center, not the ground station. Position and "
+                "velocity use inertial X/Y/Z axes at the simulation start."
+            ),
+            wraplength=500,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=2, padx=8, pady=(2, 12), sticky="w")
+        state_labels = (
+            "Position X (km):",
+            "Position Y (km):",
+            "Position Z (km):",
+            "Velocity X (km/s):",
+            "Velocity Y (km/s):",
+            "Velocity Z (km/s):",
+        )
+        for row, (label, variable) in enumerate(
+            zip(state_labels, self.state_vector_values), start=1
+        ):
+            self._entry(self.state_vector_frame, row, label, variable)
 
         self.jitter_frame = ttk.LabelFrame(
             jitter, text="Terminal Jitter Profiles & Suppression", padding=18
@@ -241,6 +363,21 @@ class OGSApplication(tk.Tk):
                 except tk.TclError:
                     pass
 
+    def _update_trajectory_mode(self) -> None:
+        for frame in (
+            self.fixed_trajectory_frame,
+            self.keplerian_frame,
+            self.state_vector_frame,
+        ):
+            frame.grid_remove()
+        mode = self.trajectory_mode.get()
+        if mode == "Keplerian Elements":
+            self.keplerian_frame.grid()
+        elif mode.startswith("Initial ECI"):
+            self.state_vector_frame.grid()
+        else:
+            self.fixed_trajectory_frame.grid()
+
     def _update_jitter_labels(self) -> None:
         if self.link_type.get() == "inter-satellite":
             self.first_jitter_label.configure(text="Satellite A Jitter (µrad):")
@@ -267,6 +404,46 @@ class OGSApplication(tk.Tk):
         config.orbit.worst_case_elevation_deg = self._number(
             self.elevation, "Worst-case elevation", 5, 90
         )
+        trajectory_mode = self.trajectory_mode.get()
+        if trajectory_mode == "Keplerian Elements":
+            config.orbit.mode = "keplerian"
+        elif trajectory_mode.startswith("Initial ECI"):
+            config.orbit.mode = "state-vector"
+        else:
+            config.orbit.mode = "fixed"
+        config.orbit.minimum_elevation_deg = self._number(
+            self.minimum_elevation, "Minimum elevation", 0, 90
+        )
+        if config.orbit.mode == "fixed":
+            config.satellite_a.height_km = self._number(
+                self.satellite_height_km, "Satellite altitude", 100
+            )
+        elif config.orbit.mode == "keplerian":
+            config.orbit.keplerian.semi_major_axis_km = self._number(
+                self.semi_major_axis_km, "Semi-major axis", 6378.138
+            )
+            config.orbit.keplerian.eccentricity = self._number(
+                self.eccentricity, "Eccentricity", 0, 0.999999
+            )
+            config.orbit.keplerian.inclination_deg = self._number(
+                self.inclination_deg, "Inclination", 0, 180
+            )
+            config.orbit.keplerian.raan_deg = self._number(
+                self.raan_deg, "RAAN", 0, 360
+            )
+            config.orbit.keplerian.argument_of_periapsis_deg = self._number(
+                self.argument_periapsis_deg, "Argument of periapsis", 0, 360
+            )
+            config.orbit.keplerian.true_anomaly_deg = self._number(
+                self.true_anomaly_deg, "True anomaly", 0, 360
+            )
+        else:
+            state_values = [
+                self._number(variable, f"State-vector component {index + 1}")
+                for index, variable in enumerate(self.state_vector_values)
+            ]
+            config.orbit.state_vector.position_eci_km = state_values[:3]
+            config.orbit.state_vector.velocity_eci_km_s = state_values[3:]
         config.weather.use_live = self.weather_source.get() == "Live API"
         config.weather.continuous_mode = self.weather_timeline.get()
         config.ground.latitude_deg = self._number(self.latitude, "Latitude", -90, 90)

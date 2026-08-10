@@ -20,10 +20,18 @@ cfg.satA.PointingError    = 1e-6;  % rad, Static/systematic pointing error (used
 cfg.satA.JitterSigma      = 2.0e-6;  % rad, 1-sigma dynamic tracking jitter (used by continuous engine only)
 
 % Orbital geometry configuration
-cfg.orbit.UseTLE = false;
-cfg.orbit.WorstCaseElevationAngle = 20; % deg, evaluation angle for ground-space links
-cfg.orbit.TLE_Line1 = '';            % reserved for future TLE pass calculations
-cfg.orbit.TLE_Line2 = '';
+cfg.orbit.Mode = "fixed"; % "fixed" | "keplerian" | "state-vector"
+cfg.orbit.WorstCaseElevationAngle = 20; % deg, fixed-mode evaluation angle
+cfg.orbit.MinElevationAngle = 5; % deg, access mask for moving trajectories
+cfg.orbit.GeometrySampleTime = 1; % s, orbit sampling before jitter interpolation
+cfg.orbit.Keplerian.SemiMajorAxisKm = 6928.137;
+cfg.orbit.Keplerian.Eccentricity = 0.001;
+cfg.orbit.Keplerian.InclinationDeg = 51.6;
+cfg.orbit.Keplerian.RAANDeg = 0;
+cfg.orbit.Keplerian.ArgumentOfPeriapsisDeg = 0;
+cfg.orbit.Keplerian.TrueAnomalyDeg = 0;
+cfg.orbit.StateVector.PositionECIKm = [6928.137, 0, 0];
+cfg.orbit.StateVector.VelocityECIKmS = [0, 4.72, 5.93];
 
 %% ---- 3. Satellite B (Inter-Satellite Mesh Routing, Optional) ----
 cfg.satB.OpticsEfficiency = 0.8;

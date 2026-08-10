@@ -19,8 +19,33 @@ class GroundStation(Terminal):
 
 
 @dataclass
+class KeplerianConfig:
+    semi_major_axis_km: float = 6928.137
+    eccentricity: float = 0.001
+    inclination_deg: float = 51.6
+    raan_deg: float = 0.0
+    argument_of_periapsis_deg: float = 0.0
+    true_anomaly_deg: float = 0.0
+
+
+@dataclass
+class StateVectorConfig:
+    position_eci_km: list[float] = field(
+        default_factory=lambda: [6928.137, 0.0, 0.0]
+    )
+    velocity_eci_km_s: list[float] = field(
+        default_factory=lambda: [0.0, 4.72, 5.93]
+    )
+
+
+@dataclass
 class OrbitConfig:
+    mode: str = "fixed"
     worst_case_elevation_deg: float = 20.0
+    minimum_elevation_deg: float = 5.0
+    geometry_sample_time_s: float = 1.0
+    keplerian: KeplerianConfig = field(default_factory=KeplerianConfig)
+    state_vector: StateVectorConfig = field(default_factory=StateVectorConfig)
 
 
 @dataclass

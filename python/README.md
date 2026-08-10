@@ -1,6 +1,6 @@
 # Python Simulator
 
-This folder contains a standard-library Python version of the optical link-budget simulator. It follows the same scenario, hardware, atmospheric-loss, snapshot, continuous-jitter, and outage models as the MATLAB application.
+This folder contains the standard-library Python version of the optical link-budget simulator. It follows the same scenario, trajectory, hardware, atmospheric-loss, snapshot, continuous-jitter, access, and outage models as the MATLAB application.
 
 ## Requirements
 
@@ -28,6 +28,8 @@ py python\run.py
 
 ## Install from PyPI
 
+The package version for these functions is `3.2.0`.
+
 The packaged application can be installed and launched with:
 
 ```bash
@@ -38,7 +40,8 @@ ogs-linkbudget
 ## Features
 
 - Downlink, uplink, and inter-satellite links
-- User-selected worst-case elevation for ground-space links
+- Fixed worst-case, Keplerian-element, and initial-state-vector trajectories
+- Dynamic slant range, azimuth, elevation, and ground-station access
 - Manual weather or live Open-Meteo conditions
 - Past Replay and Current Hold continuous weather timelines
 - Independent transmitter and receiver jitter-profile selection
@@ -49,9 +52,23 @@ ogs-linkbudget
 
 Each continuous run creates a fresh random jitter sequence. No seed is requested from the user.
 
+## Trajectory
+
+The Trajectory tab provides three ground-space geometry modes:
+
+1. **Fixed Worst-case Geometry** uses the Scenario tab's elevation and the configured satellite altitude to produce one conservative slant range.
+2. **Keplerian Elements** accepts semi-major axis, eccentricity, inclination, right ascension of the ascending node (RAAN), argument of periapsis, and true anomaly at the simulation start.
+3. **Initial ECI State Vector** accepts position `[X, Y, Z]` in kilometres and velocity `[Vx, Vy, Vz]` in kilometres per second at the simulation start.
+
+ECI means Earth-Centered Inertial: the state-vector origin is Earth's center of mass, not the ground station. The simulator propagates the inertial state, rotates it into the Earth-fixed frame for the simulation epoch, and calculates station-relative azimuth, elevation, and range. For example, `[7000, 0, 0] km` with approximately `[0, 7.546, 0] km/s` describes a near-circular equatorial orbit rather than a satellite 7,000 km from the station.
+
+Keplerian propagation is analytic. State-vector propagation uses a fourth-order Runge-Kutta two-body integrator with steps no longer than one second. **Minimum Elevation** defines the access mask; samples below it count as no access.
+
+The model intentionally does not use TLE, OMM, or satellite-catalog data. It also omits drag, Earth oblateness, third-body forces, maneuvers, attitude, and orbit-estimation uncertainty.
+
 ## Interface
 
-The Scenario Settings tab selects the link direction, conservative elevation, weather source, station location, simulation mode, weather timeline, and duration.
+The Scenario Settings tab selects the link direction, fixed-mode conservative elevation, weather source, station location, simulation mode, weather timeline, and duration. The separate Trajectory tab contains the trajectory mode, elevation mask, and its active mode's parameters.
 
 - **OLYMPUS Platform PSD (Open Loop)** uses `S(f) = 160/(1 + f²) µrad²/Hz`, approximately `15.85 µrad` radial RMS, at 200 Hz.
 - **OLYMPUS After ATP (Reference Design)** uses the same modeled disturbance shape calibrated to a published `0.34 µrad` optical-terminal residual target. It is a design reference rather than a measured OLYMPUS closed-loop flight spectrum.
@@ -78,7 +95,7 @@ The Jitter Models tab contains the independent Tx/Rx profile selectors and their
   <em>Python optical hardware and pointing controls.</em>
 </p>
 
-Continuous simulations display the randomized link-margin profile, the ideal no-weather/no-jitter reference, the configurable operational outage threshold, the `0 dB` receiver-sensitivity boundary, the margin probability density, and the calculated outage rate.
+Continuous simulations display the randomized link-margin profile, the dynamic ideal no-weather/no-jitter reference, the configurable operational outage threshold, the `0 dB` receiver-sensitivity boundary, and the visible-link margin probability density. The availability chart separates total service outage from no geometric access and reports the conditional outage rate while the satellite is visible.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/reptide/ogs-linkbudget-live/main/images/python/python_simulation_result.png" width="700" alt="Python continuous simulation analytics">
@@ -94,4 +111,4 @@ From the project folder:
 python3 -m unittest discover -s python/tests -t python
 ```
 
-The test suite uses local TLE data and does not require an internet connection.
+The tests use manual weather and local trajectory inputs, so they do not require an internet connection.

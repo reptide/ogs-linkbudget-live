@@ -1,9 +1,7 @@
 function run_link_budget_continuous(cfg, duration, timeStep, txJitterProfile, rxJitterProfile)
-%RUN_LINK_BUDGET_CONTINUOUS Simulates link margin under dynamic pointing jitter.
-%
-% The function selects ground-space or inter-satellite terminal roles,
-% calculates path and propagation losses, generates independent two-axis
-% terminal motion, and plots the margin distribution and outage rate.
+%RUN_LINK_BUDGET_CONTINUOUS Simulates a moving optical link with terminal jitter.
+% Orbit geometry, weather, and high-rate pointing motion are sampled on
+% separate timelines and combined into margin, access, and outage results.
 
     if nargin < 1 || isempty(cfg)
         try
@@ -16,6 +14,9 @@ function run_link_budget_continuous(cfg, duration, timeStep, txJitterProfile, rx
     if nargin < 3 || isempty(timeStep), timeStep = 0.1; end
     if nargin < 4 || isempty(txJitterProfile), txJitterProfile = 'Configured Random'; end
     if nargin < 5 || isempty(rxJitterProfile), rxJitterProfile = txJitterProfile; end
+    if duration <= 0 || timeStep <= 0
+        error('Duration and time step must be positive.');
+    end
 
     legacyRician = contains(txJitterProfile, 'Rician', 'IgnoreCase', true);
     if contains(txJitterProfile, 'Rayleigh', 'IgnoreCase', true) || legacyRician
@@ -45,19 +46,52 @@ function run_link_budget_continuous(cfg, duration, timeStep, txJitterProfile, rx
     end
 
     t = 0:timeStep:duration;
+    if t(end) < duration
+        t(end+1) = duration;
+    end
     N = numel(t);
-    plotTime = t;
-    plotTimeLabel = 'Time (Seconds)';
+    [weatherContext, startTimeUTC, plotTime, plotTimeLabel] = ...
+        prepareWeatherTimeline(cfg, duration, t);
+
+    if link.Type == "inter-satellite"
+        geometryElapsed = [0, duration];
+        geometry = struct( ...
+            'Mode', "fixed-inter-satellite", ...
+            'Source', "Fixed inter-satellite range", ...
+            'ElapsedSeconds', geometryElapsed, ...
+            'RangeM', repmat(link.SatDistance*1e3, 1, 2), ...
+            'AzimuthDeg', [NaN, NaN], ...
+            'ElevationDeg', [NaN, NaN], ...
+            'Visible', [true, true]);
+    else
+        geometryStep = cfg.orbit.GeometrySampleTime;
+        if ~isfinite(geometryStep) || geometryStep <= 0
+            error('Orbit geometry sample time must be positive.');
+        end
+        geometryElapsed = 0:geometryStep:duration;
+        if geometryElapsed(end) < duration
+            geometryElapsed(end+1) = duration;
+        end
+        geometry = resolve_trajectory(cfg, geometryElapsed, startTimeUTC);
+    end
+
+    rangeProfileM = interp1(geometry.ElapsedSeconds, geometry.RangeM, t, 'linear');
+    if link.Type == "inter-satellite"
+        elevationProfileDeg = nan(size(t));
+        visibleProfile = true(size(t));
+    else
+        elevationProfileDeg = interp1( ...
+            geometry.ElapsedSeconds, geometry.ElevationDeg, t, 'linear');
+        visibleProfile = elevationProfileDeg >= cfg.orbit.MinElevationAngle;
+    end
 
     callerRngState = rng;
     restoreRng = onCleanup(@() rng(callerRngState));
     rng('shuffle');
-
-    lambda = link.Wavelength;
-    D_tx = tx.ApertureDiameter;
-    D_rx = rx.ApertureDiameter;
-    sigma_tx = tx.JitterSigma;
-    sigma_rx = rx.JitterSigma;
+    [txX, txY, txProfileInfo] = generate_terminal_jitter( ...
+        txJitterProfile, tx.JitterSigma, timeStep, N);
+    [rxX, rxY, rxProfileInfo] = generate_terminal_jitter( ...
+        rxJitterProfile, rx.JitterSigma, timeStep, N);
     txSuppressionDB = link.TxJitterSuppressionDB;
     rxSuppressionDB = link.RxJitterSuppressionDB;
     outageMarginDB = link.OutageMarginDB;
@@ -68,152 +102,206 @@ function run_link_budget_continuous(cfg, duration, timeStep, txJitterProfile, rx
         error('Required operational margin must be nonnegative.');
     end
 
-    if link.Type == "inter-satellite"
-        elevationAngle = NaN;
-        L_space = link.SatDistance * 1e3;
-    else
-        elevationAngle = cfg.orbit.WorstCaseElevationAngle;
-        L_space = slantRangeCircularOrbit( ...
-            elevationAngle, satA.Height*1e3, gs.Height*1e3);
-    end
-    divergence = 1.22 * lambda / D_tx;
-    beamRadius = L_space * divergence;
-
     thetaBias = link.BoresightBias;
     if nargin < 5 && ~legacyRician
         thetaBias = 0;
     end
-    [txX, txY, txProfileInfo] = generate_terminal_jitter( ...
-        txJitterProfile, sigma_tx, timeStep, N);
-    [rxX, rxY, rxProfileInfo] = generate_terminal_jitter( ...
-        rxJitterProfile, sigma_rx, timeStep, N);
     txScale = 10^(-txSuppressionDB/20);
     rxScale = 10^(-rxSuppressionDB/20);
     angularError = hypot( ...
         thetaBias + txX*txScale + rxX*rxScale, ...
         txY*txScale + rxY*rxScale);
-    displacement = L_space * angularError;
+    divergence = 1.22*link.Wavelength/tx.ApertureDiameter;
+    beamRadiusM = rangeProfileM*divergence;
+    displacementM = rangeProfileM.*angularError;
     trackingLossDB = 10*log10(max( ...
-        exp(-2*(displacement.^2)/(beamRadius^2)), 1e-30));
+        exp(-2*(displacementM.^2)./(beamRadiusM.^2)), 1e-30));
 
     if link.Type == "inter-satellite"
-        atmosphereLossDB = 0;
+        atmosphereLossDB = zeros(size(t));
         fprintf("Continuous sim path: INTER-SATELLITE (%.1f km, no atmospheric loss)\n", ...
             link.SatDistance);
-    elseif cfg.weather.UseLive
-        if string(cfg.weather.ContinuousMode) == "Current Hold"
-            weather = fetch_live_weather(gs.Latitude, gs.Longitude);
-            atmosphereLossDB = compute_atmospheric_loss( ...
-                weather.VisibilityKm, weather.AttenuationType, elevationAngle, ...
-                gs.Height, lambda, link.TroposphereHeight, link.AbsorptionLoss);
-            windowStart = datetime('now', 'TimeZone', 'UTC');
-            plotTime = windowStart + seconds(t);
-            plotTimeLabel = 'Projected Time (UTC)';
-            fprintf("Continuous sim atmosphere: CURRENT HOLD (%.2f km visibility, %s, %.1f minutes)\n", ...
-                weather.VisibilityKm, weather.AttenuationType, duration/60);
-        else
-            weather = fetch_weather_history(gs.Latitude, gs.Longitude, duration);
-            sampleLossDB = zeros(size(weather.VisibilityKm));
-            for k = 1:numel(sampleLossDB)
-                sampleLossDB(k) = compute_atmospheric_loss( ...
-                    weather.VisibilityKm(k), weather.AttenuationType(k), elevationAngle, ...
-                    gs.Height, lambda, link.TroposphereHeight, link.AbsorptionLoss);
-            end
-            atmosphereLossDB = interp1( ...
-                weather.RelativeTimeSeconds, sampleLossDB, t, 'linear', 'extrap');
-            plotTime = weather.TimeUTC(end) - seconds(duration) + seconds(t);
-            plotTimeLabel = 'Historical Time (UTC)';
-            fprintf("Continuous sim atmosphere: PAST REPLAY (%d samples, %s to %s UTC)\n", ...
-                numel(weather.TimeUTC), string(weather.TimeUTC(1), "yyyy-MM-dd HH:mm"), ...
-                string(weather.TimeUTC(end), "yyyy-MM-dd HH:mm"));
-        end
     else
-        visibility = cfg.weather.Manual.VisibilityKm;
-        attenuation = cfg.weather.Manual.AttenuationType;
-        fprintf("Continuous sim atmosphere: MANUAL (%.2f km visibility, %s)\n", ...
-            visibility, attenuation);
-        atmosphereLossDB = compute_atmospheric_loss( ...
-            visibility, attenuation, elevationAngle, gs.Height, lambda, ...
-            link.TroposphereHeight, link.AbsorptionLoss);
+        atmosphereAtGeometry = calculateAtmosphereTimeline( ...
+            cfg, weatherContext, geometry);
+        atmosphereLossDB = interp1(geometry.ElapsedSeconds, ...
+            atmosphereAtGeometry, t, 'linear');
+        fprintf("Continuous sim trajectory: %s (%.1f%% geometric access)\n", ...
+            geometry.Source, 100*mean(visibleProfile));
     end
 
-    pathLossDB = fspl(L_space, lambda);
-    txGainDB = 10*log10((pi*D_tx/lambda)^2);
-    rxGainDB = 10*log10((pi*D_rx/lambda)^2);
-    idealReceivedDBm = link.Ptx + 10*log10(tx.OpticsEfficiency) + ...
+    wavelength = link.Wavelength;
+    pathLossDB = 20*log10(4*pi*rangeProfileM/wavelength);
+    txGainDB = 10*log10((pi*tx.ApertureDiameter/wavelength)^2);
+    rxGainDB = 10*log10((pi*rx.ApertureDiameter/wavelength)^2);
+    receivedReferenceDBm = link.Ptx + 10*log10(tx.OpticsEfficiency) + ...
         10*log10(rx.OpticsEfficiency) + txGainDB + rxGainDB - pathLossDB;
-    idealMarginDB = idealReceivedDBm - link.Preq;
-    baselineMarginDB = idealReceivedDBm - atmosphereLossDB - link.Preq;
-    marginProfile = baselineMarginDB + trackingLossDB;
-    outageRate = 100 * sum(marginProfile < outageMarginDB) / N;
+    idealMarginDB = receivedReferenceDBm-link.Preq;
+    marginProfile = idealMarginDB-atmosphereLossDB+trackingLossDB;
+
+    serviceOutageMask = ~visibleProfile | marginProfile < outageMarginDB;
+    serviceOutageRate = 100*mean(serviceOutageMask);
+    noAccessRate = 100*mean(~visibleProfile);
+    if any(visibleProfile)
+        visibleLinkOutageRate = 100*mean( ...
+            marginProfile(visibleProfile) < outageMarginDB);
+    else
+        visibleLinkOutageRate = NaN;
+    end
 
     fig = findobj('Type', 'figure', ...
         'Name', 'Continuous Dynamic Performance Simulation Analytics');
     if isempty(fig)
         fig = figure('Name', 'Continuous Dynamic Performance Simulation Analytics', ...
-            'Position', [450, 80, 900, 700]);
+            'Position', [450, 80, 1000, 760]);
     else
         figure(fig);
         clf(fig);
-        fig.Position = [450, 80, 900, 700];
+        fig.Position = [450, 80, 1000, 760];
     end
     layout = tiledlayout(fig, 2, 2, 'TileSpacing', 'loose', 'Padding', 'loose');
 
     marginAxes = nexttile(layout, [1, 2]);
-    plot(marginAxes, plotTime, marginProfile, 'b-', 'LineWidth', 1.5);
+    marginForPlot = marginProfile;
+    marginForPlot(~visibleProfile) = NaN;
+    plot(marginAxes, plotTime, marginForPlot, 'b-', 'LineWidth', 1.3, ...
+        'DisplayName', 'Simulated Margin');
     hold(marginAxes, 'on');
+    referenceForPlot = idealMarginDB;
+    referenceForPlot(~visibleProfile) = NaN;
+    plot(marginAxes, plotTime, referenceForPlot, '-.', ...
+        'Color', [0.00 0.50 0.15], 'LineWidth', 1.5, ...
+        'DisplayName', 'No Atmospheric/Jitter Loss');
     if outageMarginDB ~= 0
         yline(marginAxes, 0, ':', 'Receiver Sensitivity Boundary (0 dB)', ...
             'Color', [0.45 0.45 0.45], 'LineWidth', 1, ...
-            'LabelHorizontalAlignment', 'right', 'LabelVerticalAlignment', 'bottom');
+            'LabelHorizontalAlignment', 'right', 'LabelVerticalAlignment', 'bottom', ...
+            'HandleVisibility', 'off');
     end
     yline(marginAxes, outageMarginDB, 'r--', sprintf( ...
         'Operational Outage Threshold (%.1f dB)', outageMarginDB), ...
-        'LineWidth', 1.5, 'LabelHorizontalAlignment', 'right');
-    if link.Type == "inter-satellite"
-        referenceLabel = sprintf('Reference: No Jitter Loss (%.1f dB)', idealMarginDB);
-    else
-        referenceLabel = sprintf( ...
-            'Reference: No Atmospheric/Jitter Loss (%.1f dB)', idealMarginDB);
-    end
-    yline(marginAxes, idealMarginDB, '-.', referenceLabel, ...
-        'Color', [0.00 0.50 0.15], 'LineWidth', 1.5, ...
-        'LabelHorizontalAlignment', 'left', 'LabelVerticalAlignment', 'bottom');
+        'LineWidth', 1.5, 'LabelHorizontalAlignment', 'right', ...
+        'HandleVisibility', 'off');
     grid(marginAxes, 'on');
     if link.Type == "inter-satellite"
-        title(marginAxes, sprintf( ...
-            'Dynamic Margin Profile (Tx: %s, %.1f dB; Rx: %s, %.1f dB)', ...
-            txProfileInfo.DisplayName, txSuppressionDB, ...
-            rxProfileInfo.DisplayName, rxSuppressionDB));
+        trajectorySummary = 'Fixed Inter-satellite Range';
+    elseif geometry.Mode == "fixed"
+        trajectorySummary = sprintf('Fixed Elevation %.1f deg', elevationProfileDeg(1));
     else
-        title(marginAxes, sprintf( ...
-            'Dynamic Margin Profile (Tx: %s, %.1f dB; Rx: %s, %.1f dB; Elevation: %.1f deg)', ...
-            txProfileInfo.DisplayName, txSuppressionDB, ...
-            rxProfileInfo.DisplayName, rxSuppressionDB, elevationAngle));
+        trajectorySummary = sprintf('%s, Access %.1f%%', ...
+            geometry.Source, 100*mean(visibleProfile));
     end
+    title(marginAxes, sprintf( ...
+        'Dynamic Margin Profile (%s; Tx: %s, %.1f dB; Rx: %s, %.1f dB)', ...
+        trajectorySummary, txProfileInfo.DisplayName, txSuppressionDB, ...
+        rxProfileInfo.DisplayName, rxSuppressionDB));
     xlabel(marginAxes, plotTimeLabel);
-    ylabel(marginAxes, 'Link Margin Availability (dB)');
-    profileMinimum = min([marginProfile, 0, outageMarginDB, idealMarginDB]);
-    profileMaximum = max([marginProfile, 0, outageMarginDB, idealMarginDB]);
+    ylabel(marginAxes, 'Link Margin (dB)');
+    legend(marginAxes, 'Location', 'best');
+    finiteProfile = [marginProfile(visibleProfile & isfinite(marginProfile)), ...
+        idealMarginDB(visibleProfile & isfinite(idealMarginDB)), 0, outageMarginDB];
+    profileMinimum = min(finiteProfile);
+    profileMaximum = max(finiteProfile);
     ylim(marginAxes, [max(-100, profileMinimum-10), max(20, profileMaximum+10)]);
 
     pdfAxes = nexttile(layout);
-    histogram(pdfAxes, marginProfile, 'Normalization', 'pdf', ...
-        'FaceColor', [0.4660 0.6740 0.1880], 'EdgeColor', 'k');
-    grid(pdfAxes, 'on');
-    title(pdfAxes, 'Margin Probability Density Function (PDF)');
-    xlabel(pdfAxes, 'Margin (dB)');
-    ylabel(pdfAxes, 'PDF');
+    visibleMargins = marginProfile(visibleProfile & isfinite(marginProfile));
+    if isempty(visibleMargins)
+        axis(pdfAxes, 'off');
+        text(pdfAxes, 0.5, 0.5, 'No samples above the elevation mask', ...
+            'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+    else
+        histogram(pdfAxes, visibleMargins, 'Normalization', 'pdf', ...
+            'FaceColor', [0.4660 0.6740 0.1880], 'EdgeColor', 'k');
+        grid(pdfAxes, 'on');
+        title(pdfAxes, 'Visible-Link Margin PDF');
+        xlabel(pdfAxes, 'Margin (dB)');
+        ylabel(pdfAxes, 'PDF');
+    end
 
     outageAxes = nexttile(layout);
-    bar(outageAxes, 1, outageRate, 0.4, ...
+    bar(outageAxes, [serviceOutageRate, noAccessRate], 0.55, ...
         'FaceColor', [0.8500 0.3250 0.0980]);
     grid(outageAxes, 'on');
-    set(outageAxes, 'XTick', 1, 'XTickLabel', {'Time in Outage (%)'});
+    set(outageAxes, 'XTick', 1:2, ...
+        'XTickLabel', {'Service Outage', 'No Access'});
     title(outageAxes, sprintf( ...
-        'Calculated Link Outage Rate (< %.1f dB)', outageMarginDB));
-    ylabel(outageAxes, 'Time in Outage (%)');
+        'Availability (< %.1f dB; Visible-link outage %.1f%%)', ...
+        outageMarginDB, visibleLinkOutageRate));
+    ylabel(outageAxes, 'Time (%)');
     ylim(outageAxes, [0 100]);
-    text(outageAxes, 1, min(outageRate + 5, 95), sprintf('%.1f%%', outageRate), ...
+    text(outageAxes, 1:2, min([serviceOutageRate, noAccessRate]+5, 95), ...
+        compose('%.1f%%', [serviceOutageRate, noAccessRate]), ...
         'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+end
+
+function [context, startTimeUTC, plotTime, plotTimeLabel] = prepareWeatherTimeline(cfg, duration, elapsed)
+%PREPAREWEATHERTIMELINE Resolves weather data and the simulation epoch.
+
+    startTimeUTC = datetime('now', 'TimeZone', 'UTC');
+    plotTime = elapsed;
+    plotTimeLabel = 'Time (Seconds)';
+    if cfg.link.Type == "inter-satellite"
+        context = struct('Kind', "none");
+    elseif ~cfg.weather.UseLive
+        context = struct( ...
+            'Kind', "constant", ...
+            'VisibilityKm', cfg.weather.Manual.VisibilityKm, ...
+            'AttenuationType', string(cfg.weather.Manual.AttenuationType));
+        fprintf("Continuous sim atmosphere: MANUAL (%.2f km visibility, %s)\n", ...
+            context.VisibilityKm, context.AttenuationType);
+    elseif string(cfg.weather.ContinuousMode) == "Current Hold"
+        weather = fetch_live_weather(cfg.gs.Latitude, cfg.gs.Longitude);
+        context = struct( ...
+            'Kind', "constant", ...
+            'VisibilityKm', weather.VisibilityKm, ...
+            'AttenuationType', string(weather.AttenuationType));
+        plotTime = startTimeUTC+seconds(elapsed);
+        plotTimeLabel = 'Projected Time (UTC)';
+        fprintf("Continuous sim atmosphere: CURRENT HOLD (%.2f km visibility, %s, %.1f minutes)\n", ...
+            weather.VisibilityKm, weather.AttenuationType, duration/60);
+    else
+        weather = fetch_weather_history(cfg.gs.Latitude, cfg.gs.Longitude, duration);
+        startTimeUTC = weather.TimeUTC(end)-seconds(duration);
+        plotTime = startTimeUTC+seconds(elapsed);
+        plotTimeLabel = 'Historical Time (UTC)';
+        context = struct('Kind', "history", 'History', weather);
+        fprintf("Continuous sim atmosphere: PAST REPLAY (%d samples, %s to %s UTC)\n", ...
+            numel(weather.TimeUTC), string(weather.TimeUTC(1), "yyyy-MM-dd HH:mm"), ...
+            string(weather.TimeUTC(end), "yyyy-MM-dd HH:mm"));
+    end
+end
+
+function lossDB = calculateAtmosphereTimeline(cfg, context, geometry)
+%CALCULATEATMOSPHERETIMELINE Applies weather along the changing elevation path.
+
+    sampleCount = numel(geometry.ElapsedSeconds);
+    lossDB = zeros(1, sampleCount);
+    if context.Kind == "history"
+        history = context.History;
+        relativeWeatherTime = double(history.RelativeTimeSeconds(:));
+        visibilityAtGeometry = interp1(relativeWeatherTime, ...
+            double(history.VisibilityKm(:)), geometry.ElapsedSeconds, ...
+            'linear', 'extrap');
+    else
+        visibilityAtGeometry = repmat(context.VisibilityKm, 1, sampleCount);
+    end
+
+    for sampleIndex = 1:sampleCount
+        if ~geometry.Visible(sampleIndex)
+            continue;
+        end
+        if context.Kind == "history"
+            [~, weatherIndex] = min(abs( ...
+                relativeWeatherTime-geometry.ElapsedSeconds(sampleIndex)));
+            attenuationType = history.AttenuationType(weatherIndex);
+        else
+            attenuationType = context.AttenuationType;
+        end
+        lossDB(sampleIndex) = compute_atmospheric_loss( ...
+            visibilityAtGeometry(sampleIndex), attenuationType, ...
+            geometry.ElevationDeg(sampleIndex), cfg.gs.Height, ...
+            cfg.link.Wavelength, cfg.link.TroposphereHeight, ...
+            cfg.link.AbsorptionLoss);
+    end
 end
